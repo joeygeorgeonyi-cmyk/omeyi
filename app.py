@@ -1,14 +1,56 @@
 from flask import Flask, request, redirect, session, render_template_string
-import sqlite3, datetime
+import datetime, os
+import sqlite3
+
+try:
+    import psycopg2
+    import psycopg2.extras
+except:
+    psycopg2 = None
 
 app = Flask(__name__)
 app.secret_key = "omeyi-secret-key"
+DATABASE_URL = os.environ.get("DATABASE_URL")
 DB = "shop.db"
 
+class PGWrapper:
+    def __init__(self, conn):
+        self.conn = conn
+    def cursor(self):
+        return PGCursor(self.conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor))
+    def commit(self):
+        return self.conn.commit()
+    def close(self):
+        return self.conn.close()
+    def execute(self, sql, params=()):
+        cur = self.cursor()
+        cur.execute(sql, params)
+        return cur
+
+class PGCursor:
+    def __init__(self, cur):
+        self.cur = cur
+    def execute(self, sql, params=()):
+        # change ? to %s for Postgres
+        sql = sql.replace("?", "%s")
+        sql = sql.replace("INTEGER PRIMARY KEY", "SERIAL PRIMARY KEY")
+        return self.cur.execute(sql, params)
+    def fetchone(self):
+        return self.cur.fetchone()
+    def fetchall(self):
+        return self.cur.fetchall()
+    def close(self):
+        return self.cur.close()
+
 def get_db():
+    if DATABASE_URL and psycopg2:
+        conn = psycopg2.connect(DATABASE_URL, sslmode='require')
+        conn.autocommit = True
+        return PGWrapper(conn)
     conn = sqlite3.connect(DB)
     conn.row_factory = sqlite3.Row
     return conn
+
 
 def safe(row, *names):
     d = dict(row) if row is not None else {}
