@@ -70,6 +70,12 @@ def upsert_settings(sid, md, mg):
     try: conn.execute("INSERT INTO shop_settings (shop_id, md_phone, manager_phone) VALUES (?,?,?)",(sid,md,mg))
     except: conn.execute("UPDATE shop_settings SET md_phone=?, manager_phone=? WHERE shop_id=?",(md,mg,sid))
     conn.commit()
+def period_start(period):
+    t=datetime.date.today()
+    if period=='today': return t.isoformat()
+    if period=='week': return (t-datetime.timedelta(days=7)).isoformat()
+    if period=='month': return (t-datetime.timedelta(days=30)).isoformat()
+    return '0000-01-01'
 def init_db():
     conn=get_db()
     conn.execute("CREATE TABLE IF NOT EXISTS shops (id INTEGER PRIMARY KEY, name TEXT, admin_user TEXT, admin_pass TEXT, is_active INTEGER DEFAULT 1)")
@@ -106,7 +112,6 @@ def needs_pwd_change(r):
         dt=datetime.date.fromisoformat(str(d)[:10])
         return (datetime.date.today()-dt).days>=90
     except: return False
-
 @app.route("/", methods=["GET","POST"])
 def login():
     if request.method=="POST":
@@ -142,7 +147,6 @@ def change_password():
         return STYLE+top("Change Password","Wrong old password")+"<div class='card'><p>Old password no match. <a href='/change-password'>Try again</a></p></div>"+end()
     first=request.args.get("first")
     return STYLE+top("Change Password","All staff fit change password. First login + every 90 days go prompt you.")+f"""<div class="card">{'<p><b>⚠️ Please change your password now — first login / 90 days don reach.</b></p>' if first else ''}<form method="post"><label>Old Password</label><input name="old_password" type="password" required><label>New Password</label><input name="new_password" type="password" required><button class="green">Change Password</button></form></div>"""+logout_bar()+end()
-
 @app.route("/superadmin")
 def superadmin():
     if session.get('role')!='superadmin': return blocked_msg("Only Super Admin.")
@@ -209,72 +213,88 @@ def enter_shop(sid):
     if not s: return "Shop not found"
     session.update(role="owner",username=s["admin_user"],shop_id=s["id"],name=s["name"])
     return redirect("/shop")
-
 @app.route("/shop")
 def shop():
     if 'role' not in session: return redirect("/")
     conn=get_db(); sid=session.get('shop_id'); role=session.get('role')
+    period=request.args.get("period","all")
+    pstart=period_start(period)
     shop_rec=None
     try: shop_rec=conn.execute("SELECT * FROM shops WHERE id=?",(sid,)).fetchone()
     except: pass
     staff_list=conn.execute("SELECT * FROM users WHERE shop_id=? ORDER BY id",(sid,)).fetchall() if sid else []
-    sales=conn.execute("SELECT * FROM sales WHERE shop_id=?",(sid,)).fetchall(); purch=conn.execute("SELECT * FROM purchases WHERE shop_id=?",(sid,)).fetchall()
-    sales_total=sum(float(safe(r,'total') or 0) for r in sales); purch_total=sum(float(safe(r,'total') or 0) for r in purch); profit=sum((float(safe(r,'selling_price') or 0)-float(safe(r,'cost_price') or 0))*float(safe(r,'qty') or 0) for r in sales)
+    sales_all=conn.execute("SELECT * FROM sales WHERE shop_id=?",(sid,)).fetchall(); purch=conn.execute("SELECT * FROM purchases WHERE shop_id=?",(sid,)).fetchall()
+    sales=[s for s in sales_all if str(safe(s,'date') or '')>=pstart] if period!='all' else sales_all
+    sales_total=sum(float(safe(r,'total') or 0) for r in sales_all); purch_total=sum(float(safe(r,'total') or 0) for r in purch); profit=sum((float(safe(r,'selling_price') or 0)-float(safe(r,'cost_price') or 0))*float(safe(r,'qty') or 0) for r in sales_all)
     debtors=conn.execute("SELECT * FROM debtors WHERE shop_id=? ORDER BY id DESC LIMIT 30",(sid,)).fetchall(); creditors=conn.execute("SELECT * FROM creditors WHERE shop_id=? ORDER BY id DESC LIMIT 30",(sid,)).fetchall()
     expenses=conn.execute("SELECT * FROM expenses WHERE shop_id=? ORDER BY id DESC LIMIT 30",(sid,)).fetchall(); losses=conn.execute("SELECT * FROM losses WHERE shop_id=? ORDER BY id DESC LIMIT 30",(sid,)).fetchall()
     requests_list=conn.execute("SELECT * FROM requests WHERE shop_id=? ORDER BY id DESC LIMIT 30",(sid,)).fetchall(); submissions=conn.execute("SELECT * FROM submissions WHERE shop_id=? ORDER BY id DESC LIMIT 30",(sid,)).fetchall(); alerts=conn.execute("SELECT * FROM alert_requests WHERE shop_id=? ORDER BY id DESC LIMIT 30",(sid,)).fetchall()
     items={}
     for r in purch:
         it=r["item"]; items.setdefault(it,{"item":it,"purch_qty":0,"sales_qty":0,"cost_price":safe(r,'cost_price'),"selling_price":safe(r,'selling_price'),"expiry_date":safe(r,'expiry_date'),"min_stock":safe(r,'min_stock'),"max_stock":safe(r,'max_stock')}); items[it]["purch_qty"]+=float(safe(r,'qty') or 0)
-    for r in sales:
+    for r in sales_all:
         it=r["item"]; items.setdefault(it,{"item":it,"purch_qty":0,"sales_qty":0,"cost_price":0,"selling_price":0,"expiry_date":"","min_stock":0,"max_stock":0}); items[it]["sales_qty"]+=float(safe(r,'qty') or 0)
     combined=[]
     for it,d in items.items():
         d["remaining"]=d["purch_qty"]-d["sales_qty"]; d["profit"]=(float(d["selling_price"] or 0)-float(d["cost_price"] or 0))*d["sales_qty"]
         d["status"]="⛔ Out" if d["remaining"]<=0 else ("⚠️ Low" if d["min_stock"] and d["remaining"]<=float(d["min_stock"]) else "✅ In Stock"); combined.append(d)
+    # PERFORMANCE REPORT - V8
+    perf={}
+    for r in sales:
+        it=r["item"]; perf.setdefault(it,{"item":it,"qty":0,"profit":0,"total":0})
+        perf[it]["qty"]+=float(safe(r,'qty') or 0); perf[it]["profit"]+=(float(safe(r,'selling_price') or 0)-float(safe(r,'cost_price') or 0))*float(safe(r,'qty') or 0); perf[it]["total"]+=float(safe(r,'total') or 0)
+    perf_list=list(perf.values())
+    most_selling=sorted(perf_list, key=lambda x: x["qty"], reverse=True)[:5]
+    most_profit=sorted(perf_list, key=lambda x: x["profit"], reverse=True)[:5]
     if role=='sales':
         html=STYLE+top(f"Welcome, {session.get('name')} (Salesperson)",f"Shop ID {sid} • Today {today_str()}")
         html+=logout_bar()
-        html+="<div class='section'>📦 Items In Stock — List + Quantity Only (No Totals)</div><div class='card'><table><tr><th>Item</th><th>Quantity In Stock</th></tr>"
+        html+="<div class='section'>📦 Items In Stock — List + Quantity Only</div><div class='card'><table><tr><th>Item</th><th>Quantity In Stock</th></tr>"
         for r in combined: html+=f"<tr><td><b>{r['item']}</b></td><td>{r['remaining']}</td></tr>"
         html+="</table></div>"
         opts="".join([f"<option value='{r['item']}'>{r['item']} - Available {r['remaining']}</option>" for r in combined if r['remaining']>0])
         html+=f"""<div class="section">🛒 My Sales — Add Sale</div><div class="card"><form method="post" action="/sell"><label>Item</label><select name="item">{opts}</select><div class="grid2"><div><label>Qty</label><input name="qty" type="number" step="any" required></div><div><label>Selling Price (₦) Per One</label><input name="price" type="number" step="any" required></div></div><label>Or new item</label><input name="item_new"><button class="green">ADD SALE</button></form></div>"""
-        html+="<div class='section'>👥 My Debtors — See & Settle</div><div class='card'><form method='post' action='/add_debtor'><label>Customer Name</label><input name='name' required><label>Amount (₦)</label><input name='amount' type='number' step='any' required><label>Phone</label><input name='phone'><label>Item / Reason</label><input name='item'><button>Add Debtor</button></form><hr>"
+        html+="<div class='section'>👥 My Debtors — See & Settle (Sales + Admin Only)</div><div class='card'><form method='post' action='/add_debtor'><label>Customer Name</label><input name='name' required><label>Amount (₦)</label><input name='amount' type='number' step='any' required><label>Phone</label><input name='phone'><label>Item / Reason</label><input name='item'><button>Add Debtor</button></form><hr>"
         for r in debtors: html+=f"<div class='row-card'><div><b>{r['name']}</b> - {fmt(r['amount'])} - {r['status']} - {r['item']}</div><a href='/settle_debtor/{r['id']}'><button class='small green'>Settle</button></a></div>"
         html+="</div>"
         html+="<div class='section'>🧾 My Sales Records</div><div class='card'><table><tr><th>Item</th><th>Qty</th><th>Total</th><th>Date</th></tr>"
-        for r in sales: html+=f"<tr><td>{r['item']}</td><td>{r['qty']}</td><td>{fmt(safe(r,'total'))}</td><td>{r['date']}</td></tr>"
+        for r in sales_all: html+=f"<tr><td>{r['item']}</td><td>{r['qty']}</td><td>{fmt(safe(r,'total'))}</td><td>{r['date']}</td></tr>"
         html+="</table></div>"
         return html+logout_bar()+end()
     html=STYLE+top(f"Welcome, {session.get('name')} ({display_role(role)})",f"Shop ID {sid} • Today {today_str()}")
     html+=logout_bar()
     if role=='owner' and shop_rec:
-        html+=f"""<div class="card" style="border:2px solid #0b3d91"><div class="section" style="margin:0 0 10px">👑 MD/CEO Details — View Only, No Posts At All</div><table><tr><th>Name</th><td><b>{shop_rec['name']}</b></td></tr><tr><th>Designation</th><td><b>MD/CEO</b></td></tr><tr><th>Shop Name</th><td>{shop_rec['name']}</td></tr><tr><th>Shop ID</th><td>{sid}</td></tr></table><p class="muted">MD cannot see staff passwords. Only Super Admin sees passwords. MD inputs = Remarks for Approvals only. MD cannot add staff, cannot add sale/purchase/debtor/creditor.</p></div>"""
+        html+=f"""<div class="card" style="border:2px solid #0b3d91"><div class="section" style="margin:0 0 10px">👑 MD/CEO Details — View Only, No Posts, No Settle</div><table><tr><th>Name</th><td><b>{shop_rec['name']}</b></td></tr><tr><th>Designation</th><td><b>MD/CEO</b></td></tr><tr><th>Shop Name</th><td>{shop_rec['name']}</td></tr><tr><th>Shop ID</th><td>{sid}</td></tr></table><p class="muted">MD cannot see passwords. MD cannot settle Debtors/Creditors. MD inputs = Remarks for Approvals only.</p></div>"""
     if role in ['owner','manager']:
         html+="<div class='section'>👥 Staff List + Performance — NO PASSWORDS</div><div class='card'><table><tr><th>Name</th><th>Designation</th><th>Username</th><th>Performance</th></tr>"
         for u in staff_list:
-            sc=sum(1 for s in sales if s['created_by']==u['username']); pc=sum(1 for s in purch if s['created_by']==u['username']); rc=sum(1 for s in requests_list if s['created_by']==u['username'])
+            sc=sum(1 for s in sales_all if s['created_by']==u['username']); pc=sum(1 for s in purch if s['created_by']==u['username']); rc=sum(1 for s in requests_list if s['created_by']==u['username'])
             html+=f"<tr><td><b>{u['name']}</b></td><td>{display_role(u['role'])}</td><td>{u['username']}</td><td>{sc} sales / {pc} purch / {rc} req</td></tr>"
-        html+="</table><p class='muted'>Only Super Admin creates staff. MD/Manager view list only.</p></div>"
+        html+="</table><p class='muted'>Only Super Admin creates staff.</p></div>"
     html+=f"""<div class="card"><b>Totals:</b> Sales {fmt(sales_total)} | Purchases {fmt(purch_total)} | Profit {fmt(profit)}<br><br><div class="grid2"><a href="/subscription"><button class="orange">💳 Subscription - View Plans & Pay</button></a><a href="/shop-settings"><button class="blue">⚙️ WhatsApp Settings - Notifications to MD & Manager Only</button></a></div>{'<a href="/print-transactions"><button style="margin-top:10px">🖨️ Print Transactions (MD & Manager)</button></a>' if role in ['owner','manager'] else ''}</div>"""
-    html+="<div class='section'>📦 Stock / Inventory — Full View for MD/Manager/Admin</div><div class='card'><table><tr><th>Item</th><th>Purchased</th><th>Sold</th><th>Remaining</th><th>Cost</th><th>Selling</th><th>Expiry</th><th>Status</th></tr>"
+    # PERFORMANCE REPORT V8 - WITH PERIOD
+    html+=f"""<div class='section'>🏆 Performance Report — Most Selling & Most Profitable — Period: {period.upper()}</div><div class='card'><form method='get' action='/shop'><label>Choose Period</label><select name='period' onchange='this.form.submit()'><option value='all' {'selected' if period=='all' else ''}>All Time</option><option value='today' {'selected' if period=='today' else ''}>Today</option><option value='week' {'selected' if period=='week' else ''}>This Week (Last 7 Days)</option><option value='month' {'selected' if period=='month' else ''}>This Month (Last 30 Days)</option></select></form><br><div class='grid2'><div><b>🔥 Most Selling (By Qty)</b><table><tr><th>Product</th><th>Qty Sold</th><th>Total</th></tr>{''.join([f"<tr><td><b>{x['item']}</b></td><td>{x['qty']}</td><td>{fmt(x['total'])}</td></tr>" for x in most_selling]) or '<tr><td colspan=3>No sales in this period</td></tr>'}</table></div><div><b>💰 Most Profitable (By Profit)</b><table><tr><th>Product</th><th>Profit</th><th>Qty</th></tr>{''.join([f"<tr><td><b>{x['item']}</b></td><td>{fmt(x['profit'])}</td><td>{x['qty']}</td></tr>" for x in most_profit]) or '<tr><td colspan=3>No sales in this period</td></tr>'}</table></div></div></div>"""
+    html+="<div class='section'>📦 Stock / Inventory</div><div class='card'><table><tr><th>Item</th><th>Purchased</th><th>Sold</th><th>Remaining</th><th>Cost</th><th>Selling</th><th>Expiry</th><th>Status</th></tr>"
     for r in combined: html+=f"<tr><td><b>{r['item']}</b></td><td>{r['purch_qty']}</td><td>{r['sales_qty']}</td><td><b>{r['remaining']}</b></td><td>{fmt(r['cost_price'])}</td><td>{fmt(r['selling_price'])}</td><td>{r['expiry_date'] or '-'}</td><td>{r['status']}</td></tr>"
     html+="</table></div>"
     if role=='admin':
         opts="".join([f"<option value='{r['item']}'>{r['item']} - Available {r['remaining']}</option>" for r in combined if r['remaining']>0])
-        html+=f"""<div class="section">🛒 Add Sale - Admin Only (MD & Manager Cannot Add Sale)</div><div class="card"><form method="post" action="/sell"><label>Item</label><select name="item">{opts}</select><div class="grid2"><div><label>Qty</label><input name="qty" type="number" step="any" required></div><div><label>Selling Price (₦)</label><input name="price" type="number" step="any" required></div></div><label>Or new item</label><input name="item_new"><button class="green">ADD SALE</button></form></div>"""
+        html+=f"""<div class="section">🛒 Add Sale - Admin Only</div><div class="card"><form method="post" action="/sell"><label>Item</label><select name="item">{opts}</select><div class="grid2"><div><label>Qty</label><input name="qty" type="number" step="any" required></div><div><label>Selling Price (₦)</label><input name="price" type="number" step="any" required></div></div><label>Or new item</label><input name="item_new"><button class="green">ADD SALE</button></form></div>"""
     if role in ['manager','admin']:
-        html+="""<div class="section">➕ Add Purchase - Manager/Admin Only (MD No Post)</div><div class="card"><form method="post" action="/add_purchase"><label>Item Name</label><input name="item" required><div class="grid3"><div><label>Qty</label><input name="qty" type="number" step="any" required></div><div><label>Cost Price</label><input name="cost_price" type="number" step="any" required></div><div><label>Selling Price</label><input name="selling_price" type="number" step="any" required></div></div><div class="grid3"><div><label>Expiry Date</label><input name="expiry_date" type="date"></div><div><label>Min Stock</label><input name="min_stock" type="number" step="any" value="0"></div><div><label>Max Stock</label><input name="max_stock" type="number" step="any" value="0"></div></div><button class="orange">ADD PURCHASE - Will Notify MD & Manager</button></form></div>"""
+        html+="""<div class="section">➕ Add Purchase - Manager/Admin Only</div><div class="card"><form method="post" action="/add_purchase"><label>Item Name</label><input name="item" required><div class="grid3"><div><label>Qty</label><input name="qty" type="number" step="any" required></div><div><label>Cost Price</label><input name="cost_price" type="number" step="any" required></div><div><label>Selling Price</label><input name="selling_price" type="number" step="any" required></div></div><div class="grid3"><div><label>Expiry Date</label><input name="expiry_date" type="date"></div><div><label>Min Stock</label><input name="min_stock" type="number" step="any" value="0"></div><div><label>Max Stock</label><input name="max_stock" type="number" step="any" value="0"></div></div><button class="orange">ADD PURCHASE - Will Notify MD & Manager</button></form></div>"""
     if role in ['manager','admin','owner']:
-        html+="<div class='section'>👥 Debtors - View Only for MD/Manager (Admin Can Add)</div><div class='card'>"
+        html+="<div class='section'>👥 Debtors — MD View Only, Manager NO Settle, Admin Can Settle</div><div class='card'>"
         if role=='admin': html+="""<form method="post" action="/add_debtor_admin"><label>Customer Name</label><input name="name" required><label>Amount (₦)</label><input name="amount" type="number" step="any" required><label>Phone</label><input name="phone"><label>Item / Reason</label><input name="item"><button>Add Debtor (Admin)</button></form><hr>"""
-        for r in debtors: html+=f"<div class='row-card'><div><b>{r['name']}</b> - {fmt(r['amount'])} - {r['status']} - {r['item']}</div><a href='/settle_debtor/{r['id']}'><button class='small green'>Settle + Notify</button></a></div>"
+        for r in debtors:
+            btn=f"<a href='/settle_debtor/{r['id']}'><button class='small green'>Settle + Notify</button></a>" if role=='admin' else "<span class='muted'>View Only — No Settle</span>"
+            html+=f"<div class='row-card'><div><b>{r['name']}</b> - {fmt(r['amount'])} - {r['status']} - {r['item']}</div>{btn}</div>"
         html+="</div>"
     if role in ['manager','admin','owner']:
-        html+="<div class='section'>🏦 Creditors - Manager/Admin Post, MD View Only</div><div class='card'>"
+        html+="<div class='section'>🏦 Creditors — MD View Only, Manager + Admin Can Settle</div><div class='card'>"
         if role in ['manager','admin']: html+="""<form method="post" action="/add_creditor"><label>Creditor Name</label><input name="name" required><label>Amount (₦)</label><input name="amount" type="number" step="any" required><label>Phone</label><input name="phone"><label>Item / Reason</label><input name="item"><button>Add Creditor</button></form><hr>"""
-        for r in creditors: html+=f"<div class='row-card'><div><b>{r['name']}</b> - {fmt(r['amount'])} - {r['status']} - {r['item']}</div><a href='/settle_creditor/{r['id']}'><button class='small'>Settle + Notify</button></a></div>"
+        for r in creditors:
+            btn=f"<a href='/settle_creditor/{r['id']}'><button class='small'>Settle + Notify</button></a>" if role in ['manager','admin'] else "<span class='muted'>View Only — No Settle</span>"
+            html+=f"<div class='row-card'><div><b>{r['name']}</b> - {fmt(r['amount'])} - {r['status']} - {r['item']}</div>{btn}</div>"
         html+="</div>"
     if role in ['manager','admin','owner']:
         html+="<div class='section'>💸 Losses & Expenses</div><div class='card'>"
@@ -284,32 +304,41 @@ def shop():
         for r in losses: html+=f"<div class='row-card'><div><b>Loss: {r['item']}</b> - {r['reason']}</div><b>{fmt(r['amount'])}</b></div>"
         html+="</div>"
     if role in ['manager','admin','owner']:
-        html+="<div class='section'>📩 Requests To MD/CEO - Expenditure / Budget / Salary / Expenses (With Notes for Approval)</div><div class='card'>"
-        if role in ['manager','admin']: html+="<form method='post' action='/add_request'><label>Type</label><select name='type'><option>Expenditure</option><option>Budget Request</option><option>Salary Schedule</option><option>Expense Request</option></select><label>Title</label><input name='title' required><label>Items / Details</label><textarea name='items'></textarea><label>Amount (₦)</label><input name='amount' type='number' step='any'><label>Notes / Reason For Approval</label><textarea name='note' placeholder='Manager: write note why MD should approve this expense...' required></textarea><button>Send Request To MD/CEO For Approval</button></form><hr><p class='muted'>Manager Expenses go through here — NOT direct post. MD go approve with remark.</p>"
+        html+="<div class='section'>📩 Requests To MD/CEO — Expenditure / Budget / Salary / Expenses</div><div class='card'>"
+        # Manager submit form ONLY if no pending? Show form but explain submit becomes inactive after submit
+        if role in ['manager','admin']: html+="<form method='post' action='/add_request'><label>Type</label><select name='type'><option>Expenditure</option><option>Budget Request</option><option>Salary Schedule</option><option>Expense Request</option></select><label>Title</label><input name='title' required><label>Items / Details</label><textarea name='items'></textarea><label>Amount (₦)</label><input name='amount' type='number' step='any'><label>Notes / Reason For Approval</label><textarea name='note' required></textarea><button>Send Request To MD/CEO For Approval</button></form><hr><p class='muted'>After you submit, Submit button go disappear until MD act. If MD reject with remark, Resubmit go become active.</p>"
         for r in requests_list:
             md_form=""
-            if role=='owner': md_form=f"""<form method="post" action="/md_remark/{r['id']}" style="margin-top:8px"><label>MD Remark Before Submitting / Approval — MD Only Input</label><textarea name="remark" placeholder="Write remark..." required></textarea><button class="small green">Save Remark & Approve</button></form>"""
-            html+=f"<div class='row-card'><div><b>{r['type']}: {r['title']}</b> - {r['status']}<br><span class='muted'>{r['items']} | {fmt(r['amount'])}</span><br><b>Note:</b> {r['note']}<br>{('<b>MD Remark:</b> '+r['owner_feedback']) if r['owner_feedback'] else ''}{md_form}</div></div>"
+            if role=='owner' and r['status']=='Pending': md_form=f"""<form method="post" action="/md_remark/{r['id']}" style="margin-top:8px"><label>MD Remark — Approve</label><textarea name="remark" placeholder="Write remark..." required></textarea><button class="small green">Save Remark & Approve</button></form><form method="post" action="/md_reject/{r['id']}" style="margin-top:6px"><label>MD Remark — Reject With Action Needed</label><textarea name="remark" placeholder="Why reject? What should Manager do?" required></textarea><button class="small red">Reject With Remark</button></form>"""
+            resubmit=""
+            if role in ['manager','admin'] and r['status']=='Rejected': resubmit=f"""<form method="post" action="/resubmit_request/{r['id']}" style="margin-top:8px"><label>Act On MD Remark & Resubmit</label><textarea name="note" placeholder="What you don fix based on MD remark?" required></textarea><button class="small orange">🔁 Resubmit After MD Rejection</button></form>"""
+            status_note=""
+            if r['status']=='Pending' and role in ['manager','admin']: status_note="<br><span class='muted'>⏳ Submit inactive — waiting for MD. No resubmit until MD reject.</span>"
+            if r['status']=='Approved': status_note="<br><span class='muted'>✅ Approved by MD — Submit closed. MD remark don submit.</span>"
+            html+=f"<div class='row-card'><div><b>{r['type']}: {r['title']}</b> - {r['status']}<br><span class='muted'>{r['items']} | {fmt(r['amount'])}</span><br><b>Note:</b> {r['note']}<br>{('<b>MD Remark:</b> '+r['owner_feedback']) if r['owner_feedback'] else ''}{status_note}{md_form}{resubmit}</div></div>"
         html+="</div>"
-        html+="<div class='section'>🚨 Alert Requests + Recommendations — Expedited</div><div class='card'>"
+        # ALERTS TABLE V8 - FIXED
+        html+="<div class='section'>🚨 Alert Requests — TABLE (Fixed)</div><div class='card'>"
         if role in ['manager','admin']: html+="<form method='post' action='/add_alert'><label>Alert Item</label><input name='alert_item' required><label>Alert Type</label><select name='alert_type'><option>Low Stock</option><option>Expiry</option><option>Urgent</option><option>Other</option></select><label>Manager Recommendation + Notes</label><textarea name='manager_message' required></textarea><label><input type='checkbox' name='expedited' value='yes' style='width:auto'> ⚡ EXPEDITED / URGENT</label><br><br><button class='orange'>Send Alert To MD/CEO</button></form><hr>"
+        html+="<table><tr><th>Item</th><th>Type</th><th>Recommendation / Notes</th><th>Status</th><th>MD Remark</th><th>Action</th></tr>"
         for r in alerts:
-            md_rem=""
-            if role=='owner': md_rem=f"""<form method="post" action="/md_alert_remark/{r['id']}"><label>MD Remark</label><input name="remark" required><button class="small">Save MD Remark</button></form>"""
-            html+=f"<div class='row-card'><div><b>{r['alert_item']} - {r['alert_type']}</b> - {r['status']}<br><span class='muted'>{r['manager_message']}</span><br>{('<b>MD Remark:</b> '+r['owner_remark']) if r['owner_remark'] else ''}{md_rem}</div></div>"
-        html+="</div>"
+            act=""
+            if role=='owner' and r['status']=='Pending': act=f"""<form method="post" action="/md_alert_remark/{r['id']}"><input name="remark" placeholder="MD Remark" required><button class="small">Save Remark</button></form>"""
+            elif role=='owner': act="<span class='muted'>Reviewed</span>"
+            else: act=f"<span class='muted'>{r['status']}</span>"
+            html+=f"<tr><td><b>{r['alert_item']}</b></td><td>{r['alert_type']}</td><td>{r['manager_message']}</td><td>{r['status']}</td><td>{r['owner_remark'] or '-'}</td><td>{act}</td></tr>"
+        html+="</table></div>"
     if role in ['manager','admin','owner']:
         html+="<div class='section'>📋 Submitted Histories To MD/CEO</div><div class='card'>"
         if role in ['manager','admin']: html+="<form method='post' action='/submit_history'><label>Period Label</label><input name='period_label' required><label>Summary</label><textarea name='summary'></textarea><label>Manager Remark</label><textarea name='manager_remark' required></textarea><button class='blue'>Submit To MD/CEO</button></form><hr>"
         for s in submissions: html+=f"<div class='row-card'><div><b>{s['period_label']} - {s['status']}</b><br><span class='muted'>{s['summary']} • {s['date']}</span><br><b>Remark:</b> {s['manager_remark']}<br>{('<b>MD Remark:</b> '+s['owner_remark']) if s['owner_remark'] else ''}</div></div>"
         html+="</div>"
     return html+logout_bar()+end()
-
 @app.route("/add_user", methods=["POST"])
-def add_user(): return blocked_msg("Only Super Admin fit create staff. MD/Manager cannot add staff in V7.")
+def add_user(): return blocked_msg("Only Super Admin fit create staff.")
 @app.route("/sell", methods=["POST"])
 def sell():
-    if session.get('role') not in ['sales','admin']: return blocked_msg("MD/CEO & Manager cannot add sale. Only Sales / Admin.")
+    if session.get('role') not in ['sales','admin']: return blocked_msg("MD & Manager cannot add sale.")
     item=(request.form.get("item_new") or request.form.get("item") or "").strip()
     try: qty=float(request.form.get("qty") or 0); price=float(request.form.get("price") or 0)
     except: return "Invalid qty/price <a href='/shop'>Go Back</a>"
@@ -322,7 +351,7 @@ def sell():
     return STYLE+top("Sale Added","")+f"<div class='card'><h3>✅ Sale Added: {item} x{qty} = {fmt(total)}</h3><a href='/sale-whatsapp/{nid}'><button class='green'>📲 Notify MD & Manager (Sale)</button></a><br><br><a href='/shop'>Go Back</a></div>"+end()
 @app.route("/add_purchase", methods=["POST"])
 def add_purchase():
-    if session.get('role') not in ['manager','admin']: return blocked_msg("MD/CEO cannot add purchase. Only Manager/Admin.")
+    if session.get('role') not in ['manager','admin']: return blocked_msg("MD cannot add purchase.")
     conn=get_db(); qty=float(request.form.get("qty") or 0); cp=float(request.form.get("cost_price") or 0); sp=float(request.form.get("selling_price") or 0)
     conn.execute("INSERT INTO purchases (shop_id, item, qty, price, cost_price, selling_price, total, expiry_date, min_stock, max_stock, created_by, created_by_role, date) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",(session.get('shop_id'),request.form.get("item"),qty,cp,cp,sp,qty*cp,request.form.get("expiry_date",""),float(request.form.get("min_stock") or 0),float(request.form.get("max_stock") or 0),session.get('username'),session.get('role'),today_str())); conn.commit()
     last=conn.execute("SELECT id FROM purchases WHERE shop_id=? ORDER BY id DESC LIMIT 1",(session.get('shop_id'),)).fetchone(); nid=last["id"] if last else 0
@@ -335,26 +364,29 @@ def add_debtor():
     return STYLE+top("Debtor Added","")+f"<div class='card'><h3>✅ Debtor Added</h3><a href='/debtor-whatsapp/{nid}'><button class='green'>📲 Notify MD & Manager (Debtor)</button></a><br><br><a href='/shop'>Go Back</a></div>"+end()
 @app.route("/add_debtor_admin", methods=["POST"])
 def add_debtor_admin():
-    if session.get('role')!='admin': return blocked_msg("Only Admin fit add debtor here.")
+    if session.get('role')!='admin': return blocked_msg("Only Admin.")
     conn=get_db(); conn.execute("INSERT INTO debtors (shop_id, name, amount, phone, item, reason, status, created_by, created_by_role, date) VALUES (?,?,?,?,?,?,?,?,?,?)",(session.get('shop_id'),request.form.get("name"),float(request.form.get("amount") or 0),request.form.get("phone",""),request.form.get("item",""),request.form.get("item",""),"Owing",session.get('username'),session.get('role'),today_str())); conn.commit(); return redirect("/shop")
 @app.route("/settle_debtor/<int:did>")
 def settle_debtor(did):
+    # V8: MD & Manager CANNOT settle Debtors. Only Sales + Admin
+    if session.get('role') not in ['sales','admin']: return blocked_msg("MD/CEO & Manager cannot settle Debtors. Only Salesperson & Admin.")
     conn=get_db(); conn.execute("UPDATE debtors SET status='Paid', paid_amount=amount WHERE id=? AND shop_id=?",(did,session.get('shop_id'))); conn.commit()
     return STYLE+top("Debtor Settled","")+f"<div class='card'><h3>✅ Debtor Settled</h3><a href='/debtor-whatsapp/{did}'><button class='green'>📲 Notify MD & Manager (Debtor Settled)</button></a><br><br><a href='/shop'>Go Back</a></div>"+end()
 @app.route("/add_creditor", methods=["POST"])
 def add_creditor():
-    if session.get('role') not in ['manager','admin']: return blocked_msg("Only Manager/Admin fit add creditor. MD view only.")
+    if session.get('role') not in ['manager','admin']: return blocked_msg("Only Manager/Admin fit add creditor.")
     conn=get_db(); conn.execute("INSERT INTO creditors (shop_id, name, amount, phone, item, reason, status, created_by, created_by_role, date) VALUES (?,?,?,?,?,?,?,?,?,?)",(session.get('shop_id'),request.form.get("name"),float(request.form.get("amount") or 0),request.form.get("phone",""),request.form.get("item",""),request.form.get("item",""),"Owing",session.get('username'),session.get('role'),today_str())); conn.commit()
     last=conn.execute("SELECT id FROM creditors WHERE shop_id=? ORDER BY id DESC LIMIT 1",(session.get('shop_id'),)).fetchone(); nid=last["id"] if last else 0
     return STYLE+top("Creditor Added","")+f"<div class='card'><h3>✅ Creditor Added</h3><a href='/creditor-whatsapp/{nid}'><button class='green'>📲 Notify MD & Manager (Creditor)</button></a><br><br><a href='/shop'>Go Back</a></div>"+end()
 @app.route("/settle_creditor/<int:cid>")
 def settle_creditor(cid):
-    if session.get('role') not in ['manager','admin']: return blocked_msg("Only Manager/Admin fit settle creditor.")
+    # V8: MD CANNOT settle Creditors. Only Manager + Admin
+    if session.get('role') not in ['manager','admin']: return blocked_msg("MD/CEO cannot settle Creditors. Only Manager & Admin.")
     conn=get_db(); conn.execute("UPDATE creditors SET status='Paid', paid_amount=amount WHERE id=? AND shop_id=?",(cid,session.get('shop_id'))); conn.commit()
     return STYLE+top("Creditor Settled","")+f"<div class='card'><h3>✅ Creditor Settled</h3><a href='/creditor-whatsapp/{cid}'><button class='green'>📲 Notify MD & Manager (Creditor Settled)</button></a><br><br><a href='/shop'>Go Back</a></div>"+end()
 @app.route("/add_expense", methods=["POST"])
 def add_expense():
-    if session.get('role')!='admin': return blocked_msg("Manager cannot post expense directly in V7. Manager must send Expense Request to MD for approval. Only Admin direct.")
+    if session.get('role')!='admin': return blocked_msg("Manager must send Expense Request to MD. Only Admin direct.")
     conn=get_db(); conn.execute("INSERT INTO expenses (shop_id, item, amount, note, created_by, created_by_role, date) VALUES (?,?,?,?,?,?,?)",(session.get('shop_id'),request.form.get("item"),float(request.form.get("amount") or 0),request.form.get("note",""),session.get('username'),session.get('role'),today_str())); conn.commit(); return redirect("/shop")
 @app.route("/add_loss", methods=["POST"])
 def add_loss():
@@ -368,6 +400,16 @@ def add_request():
 def md_remark(rid):
     if session.get('role')!='owner': return blocked_msg("Only MD/CEO fit give remark.")
     conn=get_db(); conn.execute("UPDATE requests SET owner_feedback=?, status='Approved' WHERE id=? AND shop_id=?",(request.form.get("remark",""),rid,session.get('shop_id'))); conn.commit(); return redirect("/shop")
+@app.route("/md_reject/<int:rid>", methods=["POST"])
+def md_reject(rid):
+    if session.get('role')!='owner': return blocked_msg("Only MD/CEO fit reject.")
+    conn=get_db(); conn.execute("UPDATE requests SET owner_feedback=?, status='Rejected' WHERE id=? AND shop_id=?",(request.form.get("remark",""),rid,session.get('shop_id'))); conn.commit(); return redirect("/shop")
+@app.route("/resubmit_request/<int:rid>", methods=["POST"])
+def resubmit_request(rid):
+    if session.get('role') not in ['manager','admin']: return blocked_msg("Only Manager/Admin fit resubmit.")
+    conn=get_db(); r=conn.execute("SELECT * FROM requests WHERE id=? AND shop_id=?",(rid,session.get('shop_id'))).fetchone()
+    if not r or r['status']!='Rejected': return blocked_msg("You can only resubmit after MD rejects with remark.")
+    conn.execute("UPDATE requests SET note=?, status='Pending' WHERE id=? AND shop_id=?",(request.form.get("note",""),rid,session.get('shop_id'))); conn.commit(); return redirect("/shop")
 @app.route("/approve_request/<int:rid>")
 def approve_request(rid):
     if session.get('role')!='owner': return blocked_msg("Only MD/CEO fit approve.")
@@ -388,7 +430,7 @@ def submit_history():
     conn=get_db(); conn.execute("INSERT INTO submissions (shop_id, period, period_label, summary, status, manager_remark, created_by, date) VALUES (?,?,?,?,?,?,?,?)",(session.get('shop_id'),request.form.get("period_label"),request.form.get("period_label"),request.form.get("summary",""),"Submitted",request.form.get("manager_remark",""),session.get('username'),today_str())); conn.commit(); return redirect("/shop")
 @app.route("/subscription")
 def subscription():
-    if session.get('role')=='sales': return blocked_msg("Salesperson cannot view subscription in V7.")
+    if session.get('role')=='sales': return blocked_msg("Salesperson cannot view subscription.")
     plans=get_plans(); html=STYLE+top("Subscription","Pay to continue using Omeyi")+f"""<div class="card" style="text-align:center"><img src="{QR_IMG}" style="width:160px;border-radius:12px;border:6px solid #fff"><p><b>Scan to open Omeyi</b><br><span class="muted">{APP_URL}</span></p></div>"""
     for p in plans: html+=f"""<div class="card"><b>{p['name']} - {fmt(p['amount'])}</b> - {p['days']} days<br><span class="muted">{PRICE_NOTICE}</span><br><br>Pay to: <b>{PAYMENT_BANK} - {PAYMENT_ACCOUNT} - {PAYMENT_NAME}</b><br><a href="/subscription/pay?plan={p['name']}"><button class="green" style="margin-top:10px">I Don Pay For {p['name']}</button></a></div>"""
     html+=f"""<div class="card"><b>How to pay:</b><br>1. Transfer to {PAYMENT_BANK} <b>{PAYMENT_ACCOUNT}</b> ({PAYMENT_NAME})<br>2. Click I Don Pay<br>3. Super Admin go confirm am.</div><a href="/shop">Go Back</a>"""+end(); return html
@@ -396,7 +438,7 @@ def subscription():
 def sub_pay(): return STYLE+top("Payment Submitted","")+f"""<div class="card"><h3>Payment Submitted</h3><p>Plan: {request.args.get('plan')}<br>Pay to: {PAYMENT_BANK} - {PAYMENT_ACCOUNT} - {PAYMENT_NAME}</p><a href="/shop">Go Back</a></div>"""+end()
 @app.route("/shop-settings", methods=["GET","POST"])
 def shop_settings():
-    if session.get('role')=='sales': return blocked_msg("Salesperson cannot view WhatsApp Settings in V7. Only MD & Manager notifications.")
+    if session.get('role')=='sales': return blocked_msg("Salesperson cannot view WhatsApp Settings.")
     if session.get('role') not in ['owner','manager','admin','superadmin']: return blocked_msg()
     if request.method=="POST":
         upsert_settings(session.get('shop_id'), request.form.get("md_phone",""), request.form.get("manager_phone",""))
@@ -407,12 +449,12 @@ def shop_settings():
             conn.commit()
         return redirect("/shop")
     plans=get_plans(); c=shop_contacts(session.get('shop_id'))
-    return STYLE+top("WhatsApp Settings","Notifications ONLY to MD & Manager — Sales, Purchases, Debtors, Creditors, Settling, Expiry & Stock Alerts")+f"""<div class="card"><form method="post"><label>MD/CEO WhatsApp Number — Gets All Notifications</label><input name="md_phone" value="{c.get('md_phone','')}" placeholder="e.g. 08037372296"><label>Manager WhatsApp Number — Gets All Notifications</label><input name="manager_phone" value="{c.get('manager_phone','')}" placeholder="e.g. 080..."><label>Monthly Price (₦)</label><input name="p1" value="{plans[0]['amount']:.0f}"><label>Quarterly Price (₦)</label><input name="p2" value="{plans[1]['amount']:.0f}"><label>Yearly Price (₦)</label><input name="p3" value="{plans[2]['amount']:.0f}"><p class="muted">WhatsApp goes to MD & Manager ONLY for: Sales, Purchases, Debtors, Creditors, Settling, Expiry, Stock Levels.</p><button>Save Settings</button></form></div>"""+end()
+    return STYLE+top("WhatsApp Settings","Notifications ONLY to MD & Manager")+f"""<div class="card"><form method="post"><label>MD/CEO WhatsApp Number</label><input name="md_phone" value="{c.get('md_phone','')}" placeholder="e.g. 08037372296"><label>Manager WhatsApp Number</label><input name="manager_phone" value="{c.get('manager_phone','')}" placeholder="e.g. 080..."><label>Monthly Price (₦)</label><input name="p1" value="{plans[0]['amount']:.0f}"><label>Quarterly Price (₦)</label><input name="p2" value="{plans[1]['amount']:.0f}"><label>Yearly Price (₦)</label><input name="p3" value="{plans[2]['amount']:.0f}"><p class="muted">WhatsApp goes to MD & Manager ONLY for: Sales, Purchases, Debtors, Creditors, Settling, Expiry, Stock Levels.</p><button>Save Settings</button></form></div>"""+end()
 def notify_page(title,msg):
     c=shop_contacts(session.get('shop_id')); links=""
     if c.get('md_phone'): links+=f"<a href='{wa_link(c['md_phone'],msg)}'><button class='green'>Send to MD/CEO on WhatsApp</button></a><br><br>"
     if c.get('manager_phone'): links+=f"<a href='{wa_link(c['manager_phone'],msg)}'><button class='blue'>Send to Manager on WhatsApp</button></a>"
-    if not links: links="<p class='muted'>No WhatsApp numbers yet. Go to WhatsApp Settings add MD & Manager numbers.</p>"
+    if not links: links="<p class='muted'>No WhatsApp numbers yet.</p>"
     return STYLE+top(title,"Notifications to MD & Manager ONLY")+f"<div class='card'><p>{msg}</p>{links}<br><a href='/shop'>Go Back</a></div>"+end()
 @app.route("/sale-whatsapp/<int:sale_id>")
 def sale_whatsapp(sale_id):
