@@ -1,4 +1,4 @@
-from flask import Flask, request, redirect, session, render_template_string
+from flask import Flask, request, redirect, session
 import datetime, os, sqlite3, urllib.parse
 try:
     import psycopg2, psycopg2.extras
@@ -16,7 +16,6 @@ PAYMENT_ACCOUNT = "8037372296"
 PAYMENT_NAME = "Joseph George"
 PRICE_NOTICE = "(Prices may be reviewed at any time)"
 DEFAULT_PLANS = [{"name":"Monthly","amount":5000,"days":30},{"name":"Quarterly","amount":13000,"days":90},{"name":"Yearly","amount":45000,"days":365}]
-# =========================
 
 class PGWrapper:
     def __init__(self, conn): self.conn = conn
@@ -38,7 +37,6 @@ def get_db():
     if DATABASE_URL and psycopg2:
         c=psycopg2.connect(DATABASE_URL, sslmode='require'); c.autocommit=True; return PGWrapper(c)
     c=sqlite3.connect(DB); c.row_factory=sqlite3.Row; return c
-
 def safe(row,*names):
     d=dict(row) if row is not None else {}
     for n in names:
@@ -49,7 +47,6 @@ def display_role(r): return {'owner':'MD/CEO','manager':'Manager','sales':'Sales
 def fmt(n):
     try: return f"₦{float(n or 0):,.0f}"
     except: return "₦0"
-
 def get_plans():
     conn=get_db()
     try:
@@ -57,18 +54,15 @@ def get_plans():
         if rows: return [{"name":r["name"],"amount":float(r["amount"]),"days":int(r["days"])} for r in rows]
     except: pass
     return DEFAULT_PLANS
-
 def stock_remaining(sid, item):
     conn=get_db()
     p=conn.execute("SELECT COALESCE(SUM(qty),0) as q FROM purchases WHERE shop_id=? AND item=?",(sid,item)).fetchone()
     s=conn.execute("SELECT COALESCE(SUM(qty),0) as q FROM sales WHERE shop_id=? AND item=?",(sid,item)).fetchone()
     return float(safe(p,'q'))-float(safe(s,'q'))
-
 def wa_link(phone,msg):
     phone="".join([c for c in str(phone or "") if c.isdigit()])
     if phone.startswith("0"): phone="234"+phone[1:]
     return f"https://wa.me/{phone}?text={urllib.parse.quote(msg)}"
-
 def shop_contacts(sid):
     conn=get_db()
     try:
@@ -76,16 +70,11 @@ def shop_contacts(sid):
         if r: return dict(r)
     except: pass
     return {"md_phone":"","manager_phone":""}
-
-# Postgres-safe upsert
 def upsert_settings(sid, md, mg):
     conn=get_db()
-    try:
-        conn.execute("INSERT INTO shop_settings (shop_id, md_phone, manager_phone) VALUES (?,?,?)",(sid,md,mg))
-    except:
-        conn.execute("UPDATE shop_settings SET md_phone=?, manager_phone=? WHERE shop_id=?",(md,mg,sid))
+    try: conn.execute("INSERT INTO shop_settings (shop_id, md_phone, manager_phone) VALUES (?,?,?)",(sid,md,mg))
+    except: conn.execute("UPDATE shop_settings SET md_phone=?, manager_phone=? WHERE shop_id=?",(md,mg,sid))
     conn.commit()
-
 def init_db():
     conn=get_db()
     conn.execute("CREATE TABLE IF NOT EXISTS shops (id INTEGER PRIMARY KEY, name TEXT, admin_user TEXT, admin_pass TEXT, is_active INTEGER DEFAULT 1)")
@@ -107,21 +96,19 @@ def init_db():
             except: pass
     conn.commit(); conn.close()
 init_db()
-
 def blocked_msg(m="You are not allowed to post this."): return f"{m} <a href='/shop'>Go Back</a>"
-STYLE="""<style>*{box-sizing:border-box}body{font-family:'Segoe UI',Arial,sans-serif;margin:0;background:#eaf0f7;color:#1e293b;padding-bottom:40px}.top{background:linear-gradient(135deg,#0b3d91,#0b5ed7 55%,#0ea5e9);color:#fff;padding:18px 16px;border-bottom:4px solid #f59e0b}.top a{color:#fde68a;font-weight:700}.omeyi{font-size:12px;color:#bfdbfe;margin:0;letter-spacing:3px;text-transform:uppercase;font-weight:800}h1{font-size:24px;margin:6px 0 2px}.sub{color:#dbeafe;font-size:13px;margin:0}.wrap{padding:0 12px 30px;max-width:960px;margin:auto}.card{background:#fff;padding:16px;border-radius:16px;margin-bottom:14px;box-shadow:0 4px 14px rgba(11,61,145,.10);border:1px solid #dbeafe}label{font-size:12px;font-weight:800;color:#0b3d91;text-transform:uppercase}input,select,textarea{padding:12px;margin:6px 0 11px;width:100%;border:1.5px solid #cbd5e1;border-radius:10px;font-size:14px;background:#f8fafc}button{padding:13px;background:#0b3d91;color:#fff;border:none;border-radius:11px;cursor:pointer;width:100%;font-weight:800}button.green{background:#16a34a}button.orange{background:#ea580c}button.blue{background:#0b5ed7}button.small{padding:8px 11px;width:auto;font-size:12px}table{width:100%;border-collapse:collapse}th{background:#0b3d91;color:#fff;padding:11px 8px;font-size:11px;text-align:left}td{padding:11px 8px;font-size:13px;border-bottom:1px solid #e2e8f0}.section{font-size:18px;font-weight:900;margin:20px 2px 10px;color:#0b3d91}.muted{font-size:12px;color:#64748b}.grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}.grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px}.footer{text-align:center;color:#64748b;font-size:12px;padding:18px 0}.badge{font-size:11px;background:#fef3c7;padding:5px 10px;border-radius:20px;font-weight:800}.row-card{background:#fff;padding:13px;border-radius:12px;margin-bottom:9px;display:flex;justify-content:space-between;border-left:6px solid #0b5ed7}</style>"""
+STYLE="""<style>*{box-sizing:border-box}body{font-family:'Segoe UI',Arial,sans-serif;margin:0;background:#eaf0f7;color:#1e293b;padding-bottom:40px}.top{background:linear-gradient(135deg,#0b3d91,#0b5ed7 55%,#0ea5e9);color:#fff;padding:18px 16px;border-bottom:4px solid #f59e0b}.top a{color:#fde68a;font-weight:700}.omeyi{font-size:12px;color:#bfdbfe;margin:0;letter-spacing:3px;text-transform:uppercase;font-weight:800}h1{font-size:24px;margin:6px 0 2px}.sub{color:#dbeafe;font-size:13px;margin:0}.wrap{padding:0 12px 30px;max-width:960px;margin:auto}.card{background:#fff;padding:16px;border-radius:16px;margin-bottom:14px;box-shadow:0 4px 14px rgba(11,61,145,.10);border:1px solid #dbeafe}label{font-size:12px;font-weight:800;color:#0b3d91;text-transform:uppercase}input,select,textarea{padding:12px;margin:6px 0 11px;width:100%;border:1.5px solid #cbd5e1;border-radius:10px;font-size:14px;background:#f8fafc}button{padding:13px;background:#0b3d91;color:#fff;border:none;border-radius:11px;cursor:pointer;width:100%;font-weight:800}button.green{background:#16a34a}button.orange{background:#ea580c}button.blue{background:#0b5ed7}button.small{padding:8px 11px;width:auto;font-size:12px}table{width:100%;border-collapse:collapse}th{background:#0b3d91;color:#fff;padding:11px 8px;font-size:11px;text-align:left}td{padding:11px 8px;font-size:13px;border-bottom:1px solid #e2e8f0}.section{font-size:18px;font-weight:900;margin:20px 2px 10px;color:#0b3d91}.muted{font-size:12px;color:#64748b}.grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}.grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px}.footer{text-align:center;color:#64748b;font-size:12px;padding:18px 0}.row-card{background:#fff;padding:13px;border-radius:12px;margin-bottom:9px;display:flex;justify-content:space-between;border-left:6px solid #0b5ed7}</style>"""
 FOOTER='<div class="footer">© Omeyi • All Rights Reserved • Powered by Omeyi Blue</div>'
 QR_IMG=f"https://api.qrserver.com/v1/create-qr-code/?size=180x180&data={APP_URL}"
 def top(t,s=""): return f'<div class="top"><p class="omeyi">Omeyi</p><h1>{t}</h1><p class="sub">{s}</p></div><div class="wrap" style="margin-top:16px">'
 def end(): return "</div>"+FOOTER
 
-# ---------- LOGIN ----------
 @app.route("/", methods=["GET","POST"])
 def login():
     if request.method=="POST":
         u=request.form.get("username","").strip(); p=request.form.get("password","").strip(); conn=get_db()
         if u=="superadmin" and p=="omeyi123":
-            session.update(role="superadmin",username="superadmin",shop_id=0,name="Super Admin"); return redirect("/superadmin")
+            session.update(role="superadmin",username="superadmin",shop_id=0,name="Super Admin",was_superadmin=True); return redirect("/superadmin")
         r=conn.execute("SELECT * FROM users WHERE username=? AND password=?",(u,p)).fetchone()
         if r: session.update(role=r["role"],username=r["username"],shop_id=r["shop_id"],name=r["name"]); return redirect("/shop")
         s=conn.execute("SELECT * FROM shops WHERE admin_user=? AND admin_pass=?",(u,p)).fetchone()
@@ -131,23 +118,34 @@ def login():
 @app.route("/logout")
 def logout(): session.clear(); return redirect("/")
 
-# ---------- SUPER ADMIN ----------
+# SUPER ADMIN + ENTER SHOP + BACK
 @app.route("/superadmin")
 def superadmin():
-    if session.get('role')!='superadmin': return blocked_msg()
+    if session.get('role')!='superadmin': return blocked_msg("Only Super Admin fit see this page. <a href='/back-to-superadmin'>Click here to go back to Super Admin</a> ")
     conn=get_db(); shops=conn.execute("SELECT * FROM shops ORDER BY id DESC").fetchall()
-    rows="".join([f"<tr><td>{s['name']}</td><td>{s['admin_user']}</td><td>{'Active' if s['is_active'] else 'Suspended'}</td><td><a href='/toggle-shop/{s['id']}'>Toggle</a></td></tr>" for s in shops])
-    return STYLE+top("Super Admin","All Shops")+f"""<div class="card"><form method="post" action="/create-shop"><label>Shop Name</label><input name="name" required><label>Admin Username</label><input name="admin_user" required><label>Admin Password</label><input name="admin_pass" required><button>Create Shop</button></form></div><div class="card"><table><tr><th>Shop</th><th>Admin</th><th>Status</th><th>Action</th></tr>{rows}</table></div><div class="card"><a href="/shop-settings"><button class="blue">⚙️ Edit Subscription Prices (Adjustable Anytime)</button></a><br><span class="muted">{PRICE_NOTICE}</span></div><a href="/logout">Logout</a>"""+end()
+    rows="".join([f"<tr><td>{s['name']}</td><td>{s['admin_user']}</td><td>{'Active' if s['is_active'] else 'Suspended'}</td><td><a href='/enter-shop/{s['id']}'><b>Enter Shop</b></a> | <a href='/toggle-shop/{s['id']}'>Toggle</a></td></tr>" for s in shops])
+    return STYLE+top("Super Admin","All Shops - You are Super Admin")+f"""<div class="card"><form method="post" action="/create-shop"><label>Shop Name</label><input name="name" required><label>Admin Username</label><input name="admin_user" required><label>Admin Password</label><input name="admin_pass" required><button>Create Shop</button></form></div><div class="card"><table><tr><th>Shop</th><th>Admin</th><th>Status</th><th>Action</th></tr>{rows}</table></div><div class="card"><a href="/shop-settings"><button class="blue">⚙️ Edit Subscription Prices (Adjustable Anytime)</button></a><br><span class="muted">{PRICE_NOTICE}</span></div><a href="/logout">Logout</a>"""+end()
 @app.route("/create-shop", methods=["POST"])
 def create_shop():
     if session.get('role')!='superadmin': return blocked_msg()
     conn=get_db(); conn.execute("INSERT INTO shops (name, admin_user, admin_pass) VALUES (?,?,?)",(request.form.get("name"),request.form.get("admin_user"),request.form.get("admin_pass"))); conn.commit(); return redirect("/superadmin")
 @app.route("/toggle-shop/<int:sid>")
 def toggle_shop(sid):
-    if session.get('role')!='superadmin': return blocked_msg()
+    if session.get('role')!='superadmin' and not session.get('was_superadmin'): return blocked_msg()
     conn=get_db(); s=conn.execute("SELECT * FROM shops WHERE id=?",(sid,)).fetchone(); conn.execute("UPDATE shops SET is_active=? WHERE id=?",(0 if s["is_active"] else 1,sid)); conn.commit(); return redirect("/superadmin")
+@app.route("/enter-shop/<int:sid>")
+def enter_shop(sid):
+    if session.get('role')!='superadmin': return blocked_msg("Only Super Admin fit enter shop.")
+    conn=get_db(); s=conn.execute("SELECT * FROM shops WHERE id=?",(sid,)).fetchone()
+    if not s: return "Shop not found <a href='/superadmin'>Go Back</a>"
+    session.update(role="owner",username=s["admin_user"],shop_id=s["id"],name=s["name"],was_superadmin=True)
+    return redirect("/shop")
+@app.route("/back-to-superadmin")
+def back_to_superadmin():
+    session.update(role="superadmin",username="superadmin",shop_id=0,name="Super Admin",was_superadmin=True)
+    return redirect("/superadmin")
 
-# ---------- SHOP ----------
+# SHOP
 @app.route("/shop")
 def shop():
     if 'role' not in session: return redirect("/")
@@ -166,8 +164,9 @@ def shop():
     for it,d in items.items():
         d["remaining"]=d["purch_qty"]-d["sales_qty"]; d["profit"]=(float(d["selling_price"] or 0)-float(d["cost_price"] or 0))*d["sales_qty"]
         d["status"]="⛔ Out of Stock" if d["remaining"]<=0 else ("⚠️ Low Stock" if d["min_stock"] and d["remaining"]<=float(d["min_stock"]) else "✅ In Stock"); combined.append(d)
+    back_btn = '<a href="/back-to-superadmin"><button style="margin-top:10px;background:#f59e0b">⬅️ Back to Super Admin</button></a>' if session.get('was_superadmin') else ''
     html=STYLE+top(f"Welcome, {session.get('name')} ({display_role(role)})",f"Shop ID {sid} • Today {today_str()}")
-    html+=f"""<div class="card"><b>Totals:</b> Sales {fmt(sales_total)} | Purchases {fmt(purch_total)} | Profit {fmt(profit)}<br><br><div class="grid2"><a href="/subscription"><button class="orange">💳 Subscription - View Plans</button></a><a href="/shop-settings"><button class="blue">⚙️ Settings - WhatsApp & Prices</button></a></div>{'<a href="/print-transactions"><button style="margin-top:10px">🖨️ Print Transactions (MD & Manager)</button></a>' if role in ['owner','manager'] else ''}<a href="/logout"><button style="margin-top:10px;background:#64748b">Logout</button></a></div>"""
+    html+=f"""<div class="card"><b>Totals:</b> Sales {fmt(sales_total)} | Purchases {fmt(purch_total)} | Profit {fmt(profit)}<br><br><div class="grid2"><a href="/subscription"><button class="orange">💳 Subscription - View Plans</button></a><a href="/shop-settings"><button class="blue">⚙️ Settings - WhatsApp & Prices</button></a></div>{'<a href="/print-transactions"><button style="margin-top:10px">🖨️ Print Transactions (MD & Manager)</button></a>' if role in ['owner','manager'] else ''}{back_btn}<a href="/logout"><button style="margin-top:10px;background:#64748b">Logout</button></a></div>"""
     html+="<div class='section'>📦 Stock / Inventory</div><div class='card'><table><tr><th>Item</th><th>Purchased</th><th>Sold</th><th>Remaining</th><th>Cost</th><th>Selling</th><th>Expiry</th><th>Status</th></tr>"
     for r in combined: html+=f"<tr><td><b>{r['item']}</b></td><td>{r['purch_qty']}</td><td>{r['sales_qty']}</td><td><b>{r['remaining']}</b></td><td>{fmt(r['cost_price'])}</td><td>{fmt(r['selling_price'])}</td><td>{r['expiry_date'] or '-'}</td><td>{r['status']}</td></tr>"
     html+="</table></div>"
@@ -203,15 +202,18 @@ def shop():
         for s in submissions: html+=f"<div class='row-card'><div><b>{s['period_label']} - {s['status']}</b><br><span class='muted'>{s['summary']} • {s['date']}</span><br><b>My Remark:</b> {s['manager_remark']}<br>{('<b>MD Remark:</b> '+s['owner_remark']) if s['owner_remark'] else ''}</div></div>"
         html+="</div>"
     if role in ['owner','manager']:
-        html+="""<div class="section">👤 Add User</div><div class="card"><form method="post" action="/add_user"><label>Name</label><input name="name" required><label>Username</label><input name="username" required><label>Password</label><input name="password" required><label>Role</label><select name="role"><option value="sales">Salesperson</option><option value="manager">Manager</option><option value="admin">Admin</option></select><button>Add User</button></form></div>"""
+        html+="""<div class="section">👤 Add User - Add Staff</div><div class="card"><form method="post" action="/add_user"><label>Name</label><input name="name" required><label>Username</label><input name="username" required><label>Password</label><input name="password" required><label>Role</label><select name="role"><option value="sales">Salesperson</option><option value="manager">Manager</option><option value="admin">Admin</option></select><button>Add User</button></form></div>"""
     return html+end()
 
 @app.route("/add_user", methods=["POST"])
 def add_user():
     if session.get('role') not in ['owner','manager']: return blocked_msg()
-    conn=get_db(); conn.execute("INSERT INTO users (shop_id, username, password, role, name) VALUES (?,?,?,?,?)",(session.get('shop_id'),request.form.get("username"),request.form.get("password"),request.form.get("role"),request.form.get("name"))); conn.commit(); return redirect("/shop")
-
-# ---------- ACTIONS ----------
+    conn=get_db()
+    try:
+        conn.execute("INSERT INTO users (shop_id, username, password, role, name) VALUES (?,?,?,?,?)",(session.get('shop_id'),request.form.get("username","").strip(),request.form.get("password","").strip(),request.form.get("role"),request.form.get("name"))); conn.commit()
+    except Exception as e:
+        return f"Username don exist before. Use another username. <a href='/shop'>Go Back</a>"
+    return redirect("/shop")
 @app.route("/sell", methods=["POST"])
 def sell():
     if session.get('role') not in ['sales','manager','admin','owner']: return blocked_msg()
@@ -225,7 +227,6 @@ def sell():
     conn=get_db(); total=qty*price; conn.execute("INSERT INTO sales (shop_id, item, qty, price, selling_price, total, created_by, created_by_role, date) VALUES (?,?,?,?,?,?,?,?,?)",(session.get('shop_id'),item,qty,price,price,total,session.get('username'),session.get('role'),today_str())); conn.commit()
     last=conn.execute("SELECT id FROM sales WHERE shop_id=? ORDER BY id DESC LIMIT 1",(session.get('shop_id'),)).fetchone(); nid=last["id"] if last else 0
     return STYLE+top("Sale Added","")+f"<div class='card'><h3>✅ Sale Added: {item} x{qty} = {fmt(total)}</h3><p>Remaining now: {remain-qty}</p><a href='/sale-whatsapp/{nid}'><button class='green'>📲 Send WhatsApp to MD & Manager</button></a><br><br><a href='/shop'>Go Back to Shop</a></div>"+end()
-
 @app.route("/add_purchase", methods=["POST"])
 def add_purchase():
     if session.get('role') not in ['manager','admin','owner']: return blocked_msg("Only Manager/Admin fit add purchase.")
@@ -270,8 +271,6 @@ def add_alert():
 def submit_history():
     if session.get('role') not in ['manager','admin']: return blocked_msg()
     conn=get_db(); conn.execute("INSERT INTO submissions (shop_id, period, period_label, summary, status, manager_remark, created_by, date) VALUES (?,?,?,?,?,?,?,?)",(session.get('shop_id'),request.form.get("period_label"),request.form.get("period_label"),request.form.get("summary",""),"Submitted",request.form.get("manager_remark",""),session.get('username'),today_str())); conn.commit(); return redirect("/shop")
-
-# ---------- SUBSCRIPTION / SETTINGS / WHATSAPP / PDF ----------
 @app.route("/subscription")
 def subscription():
     plans=get_plans(); html=STYLE+top("Subscription","Pay to continue using Omeyi")+f"""<div class="card" style="text-align:center"><img src="{QR_IMG}" style="width:160px;border-radius:12px;border:6px solid #fff;box-shadow:0 4px 12px rgba(0,0,0,.15)"><p><b>Scan to open Omeyi</b><br><span class="muted">{APP_URL}</span></p></div>"""
@@ -284,7 +283,7 @@ def shop_settings():
     if session.get('role') not in ['owner','manager','admin','superadmin']: return blocked_msg()
     if request.method=="POST":
         upsert_settings(session.get('shop_id'), request.form.get("md_phone",""), request.form.get("manager_phone",""))
-        if session.get('role')=='superadmin':
+        if session.get('role')=='superadmin' or session.get('was_superadmin'):
             conn=get_db(); conn.execute("DELETE FROM subscription_plans")
             for n,a,d in [("Monthly",request.form.get("p1"),30),("Quarterly",request.form.get("p2"),90),("Yearly",request.form.get("p3"),365)]:
                 if a: conn.execute("INSERT INTO subscription_plans VALUES (?,?,?)",(n,float(a),d))
