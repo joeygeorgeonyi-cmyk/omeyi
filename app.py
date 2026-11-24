@@ -121,43 +121,39 @@ def needs_pwd_change(r):
     except: return False
 @app.route("/", methods=["GET","POST"])
 def login():
-    conn=get_db()
-    try: shops=conn.execute("SELECT * FROM shops ORDER BY name").fetchall()
-    except: shops=[]
-    shop_opts="".join([f"<option value='{s['id']}'>{s['name']} (ID {s['id']})</option>" for s in shops])
     if request.method=="POST":
-        # POINT 2: Must select shop first
-        selected_shop = request.form.get("shop_id","").strip()
-        u=request.form.get("username","").strip(); p=request.form.get("password","").strip()
-        if not selected_shop:
-            return STYLE+top("Login","Select Shop")+"<div class='card'><p>Please select your Shop / Company first. <a href='/'>Try again</a></p></div>"+end()
-        try: selected_shop_id=int(selected_shop)
-        except: selected_shop_id=-1
-
-        # POINT 16: Super Admin - shop selection must NOT turn am to MD/CEO
-        # Super Admin must select shop 0 or any, but e must always go to /superadmin as superadmin
+        shop=request.form.get("shop","").strip()
+        u=request.form.get("username","").strip()
+        p=request.form.get("password","").strip()
+        # POINT 16: Super Admin - CHECK FIRST, before any shop check
         if u=="superadmin" and p=="omeyi123":
-            session.update(role="superadmin",username="superadmin",shop_id=0,name="Super Admin"); return redirect("/superadmin")
-
-        r=conn.execute("SELECT * FROM users WHERE username=? AND password=?",(u,p)).fetchone()
-        if r:
-            # POINT 15: Staff must enter ONLY their own shop
-            if int(r["shop_id"]) != selected_shop_id:
-                return STYLE+top("Login","Wrong Shop")+"<div class='card'><h3>⛔ Wrong Shop Selected</h3><p>You selected a different shop. You can only login to your own shop. <a href='/'>Try again</a></p></div>"+end()
-            sh=conn.execute("SELECT * FROM shops WHERE id=?",(r["shop_id"],)).fetchone()
-            if sh and not sh["is_active"]: return STYLE+top("Shop OFF","")+f"<div class='card'><h3>⛔ Shop Subscription OFF</h3><p>Super Admin don put this shop OFF.</p><a href='/'>Go Back</a></div>"+end()
-            session.update(role=r["role"],username=r["username"],shop_id=r["shop_id"],name=r["name"])
-            if needs_pwd_change(r): return redirect("/change-password?first=1")
-            return redirect("/shop")
-        s=conn.execute("SELECT * FROM shops WHERE admin_user=? AND admin_pass=?",(u,p)).fetchone()
-        if s:
-            # POINT 15 for Owner too
-            if int(s["id"]) != selected_shop_id:
-                return STYLE+top("Login","Wrong Shop")+"<div class='card'><h3>⛔ Wrong Shop Selected</h3><p>This owner account belongs to a different shop. <a href='/'>Try again</a></p></div>"+end()
-            if not s["is_active"]: return STYLE+top("Shop OFF","")+f"<div class='card'><h3>⛔ Shop Subscription OFF</h3><p>Super Admin don put this shop OFF.</p><a href='/'>Go Back</a></div>"+end()
-            session.update(role="owner",username=u,shop_id=s["id"],name=s["name"]); return redirect("/shop")
-        return STYLE+top("Login","Wrong username or password")+"<div class='card'><p>Wrong login. <a href='/'>Try again</a></p></div>"+end()
-    return STYLE+top("Login","Welcome back")+f"""<div class="card" style="text-align:center"><img src="{QR_IMG}" style="width:150px;border-radius:12px;border:6px solid #fff"><p><b>Scan to open Omeyi</b><br><span class="muted">{APP_URL}</span></p></div><div class="card"><form method="post"><label>Shop / Company — Select Your Shop</label><select name="shop_id" required><option value="">-- Select Shop / Company --</option>{shop_opts}</select><label>Username</label><input name="username" required><label>Password</label><input name="password" type="password" required><button>LOGIN</button></form></div><div class="card"><b>New Shop?</b> <a href="/subscription">View Subscription Plans</a><br><span class="muted">Pay to {PAYMENT_BANK} {PAYMENT_ACCOUNT} ({PAYMENT_NAME}) - {PRICE_NOTICE}</span></div>"""+end()
+            session.clear()
+            session["user"]="superadmin"
+            session["role"]="superadmin"
+            session["shop"]="ALL"
+            session["name"]="Super Admin"
+            return redirect("/super-admin")
+        # POINT 2: Must select shop first (for all other users)
+        if not shop:
+            return STYLE+top("Login","Select Shop")+card('<p style="color:red">Please select Shop / Company first.</p><a href="/">Try again</a>')+end()
+        # Normal staff login
+        users=USERS.get(shop,{})
+        if u not in users or users[u].get("password")!=p:
+            return STYLE+top("Login","Wrong username or password")+card('<p style="color:red">Wrong login. <a href="/">Try again</a></p>')+end()
+        # POINT 15: Staff must enter ONLY their own shop
+        # Already enforced because we only check USERS[shop]
+        session.clear()
+        session["user"]=u
+        session["role"]=users[u].get("role","staff")
+        session["shop"]=shop
+        session["name"]=users[u].get("name",u)
+        # POINT 12: MD/CEO dashboard routing
+        if session["role"]=="md":
+            return redirect("/md")
+        return redirect("/dashboard")
+    # GET - show login form
+    opts="".join([f'<option value="{s}">{s}</option>' for s in sorted(USERS.keys())])
+    return STYLE+top("Login","Welcome back")+card(f'<form method="POST"><label>SHOP / COMPANY</label><select name="shop" required><option value="">-- Select Shop / Company --</option>{opts}</select><label>USERNAME</label><input name="username" required><label>PASSWORD</label><input name="password" type="password" required><button>LOGIN</button></form>')+end()
 @app.route("/logout")
 def logout(): session.clear(); return redirect("/")
 @app.route("/change-password", methods=["GET","POST"])
