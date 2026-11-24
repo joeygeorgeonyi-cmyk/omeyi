@@ -4,7 +4,7 @@ try:
     import psycopg2, psycopg2.extras
 except: psycopg2 = None
 app = Flask(__name__)
-app.secret_key = "omeyi-secret-key"
+app.secret_key = os.environ.get("SECRET_KEY", "omeyi-secret-key")
 DATABASE_URL = os.environ.get("DATABASE_URL")
 DB = "shop.db"
 APP_URL = "https://omeyi.onrender.com"
