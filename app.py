@@ -1,4 +1,196 @@
-import sqlite3, os, json, datetime, hashlib
+import os, sqlite3
+from datetime import date, datetime, timedelta
+from flask import Flask, request, redirect, session, render_template_string, g
+
+app = Flask(__name__)
+app.secret_key = "omeyi-v12-safe"
+
+DATABASE_URL = os.environ.get("DATABASE_URL", "")
+USE_PG = DATABASE_URL.startswith("postgres")
+
+# --- DB HELPERS ---
+def get_db():
+    if "db" not in g:
+        if USE_PG:
+            import psycopg2, psycopg2.extras
+            g.db = psycopg2.connect(DATABASE_URL, sslmode="require")
+            g.db.autocommit = True
+            g.is_pg = True
+        else:
+            g.db = sqlite3.connect("omeyi.db")
+            g.db.row_factory = sqlite3.Row
+            g.is_pg = False
+    return g.db
+
+def q(sql, args=(), one=False, commit=False):
+    db = get_db()
+    is_pg = getattr(g, "is_pg", False)
+    if is_pg:
+        sql = sql.replace("?", "%s").replace("AUTOINCREMENT", "GENERATED ALWAYS AS IDENTITY")
+        cur = db.cursor(cursor_factory=__import__("psycopg2.extras", fromlist=["RealDictCursor"]).RealDictCursor)
+        cur.execute(sql, args)
+        if sql.strip().upper().startswith("SELECT"):
+            r = cur.fetchone() if one else cur.fetchall()
+            return dict(r) if (one and r) else [dict(x) for x in r] if r else ([] if not one else None)
+        return None
+    else:
+        cur = db.execute(sql, args)
+        if commit:
+            db.commit()
+        if sql.strip().upper().startswith("SELECT"):
+            r = cur.fetchone() if one else cur.fetchall()
+            return dict(r) if (one and r) else [dict(x) for x in r] if r else ([] if not one else None)
+        return None
+
+def init_db():
+    # shops
+    q("""CREATE TABLE IF NOT EXISTS shops (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE)""", commit=True)
+    q("""CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY AUTOINCREMENT, shop_id INTEGER, name TEXT, role TEXT, pin TEXT)""", commit=True)
+    q("""CREATE TABLE IF NOT EXISTS sales (id INTEGER PRIMARY KEY AUTOINCREMENT, shop_id INTEGER, item TEXT, amount REAL, qty INTEGER, seller TEXT, date TEXT)""", commit=True)
+    q("""CREATE TABLE IF NOT EXISTS reports (id INTEGER PRIMARY KEY AUTOINCREMENT, shop_id INTEGER, date TEXT, opening REAL, closing REAL, sales REAL, purchases REAL, expenditure REAL, profit REAL, bad_debt REAL, debtors REAL)""", commit=True)
+    # seed only if empty - Postgres go keep am, no wipe
+    shops = q("SELECT * FROM shops")
+    if not shops:
+        q("INSERT INTO shops (name) VALUES (?)", ("Omeyi Shop",), commit=True)
+        shop = q("SELECT * FROM shops WHERE name=?", ("Omeyi Shop",), one=True)
+        sid = shop["id"]
+        for name, role in [("Super Admin","superadmin"),("MD / CEO","md"),("Manager","manager"),("Salesperson","sales")]:
+            q("INSERT INTO users (shop_id,name,role,pin) VALUES (?,?,?,?)", (sid, name, role, "1234"), commit=True)
+
+@app.before_request
+def _init():
+    init_db()
+
+# --- LOGIN - NO PIN, JUST BUTTON ---
+LOGIN_HTML = """
+<h2 style="font-family:sans-serif;text-align:center">Omeyi Shop</h2>
+<p style="text-align:center">No PIN. Just press who you be:</p>
+<div style="max-width:300px;margin:auto;display:flex;flex-direction:column;gap:12px">
+  <a href="/enter/superadmin" style="padding:14px;background:#111;color:#fff;text-align:center;text-decoration:none;border-radius:10px">Enter as Superadmin</a>
+  <a href="/enter/md" style="padding:14px;background:#0a7a42;color:#fff;text-align:center;text-decoration:none;border-radius:10px">Enter as MD / CEO</a>
+  <a href="/enter/manager" style="padding:14px;background:#e67e22;color:#fff;text-align:center;text-decoration:none;border-radius:10px">Enter as Manager</a>
+  <a href="/enter/sales" style="padding:14px;background:#2563eb;color:#fff;text-align:center;text-decoration:none;border-radius:10px">Enter as Salesperson</a>
+</div>
+<p style="text-align:center;color:green">✅ V12 - Data dey safe for Postgres, no go wipe again</p>
+"""
+
+@app.route("/")
+def home():
+    return redirect("/login")
+
+@app.route("/login")
+def login():
+    return LOGIN_HTML
+
+@app.route("/enter/<role>")
+def enter(role):
+    shop = q("SELECT * FROM shops ORDER BY id LIMIT 1", one=True)
+    user = q("SELECT * FROM users WHERE shop_id=? AND role=?", (shop["id"], role), one=True)
+    if not user:
+        return "User not found. Go back <a href='/login'>Login</a>"
+    session["user"] = user
+    session["shop_id"] = shop["id"]
+    session["shop_name"] = shop["name"]
+    return redirect("/dashboard")
+
+@app.route("/logout")
+def logout():
+    session.clear()
+    return redirect("/login")
+
+@app.route("/dashboard")
+def dashboard():
+    u = session.get("user")
+    if not u: return redirect("/login")
+    shop_name = session.get("shop_name")
+    role = u["role"]
+    sales = q("SELECT * FROM sales WHERE shop_id=? ORDER BY id DESC LIMIT 20", (session["shop_id"],))
+    total = sum(float(s["amount"] or 0) for s in sales)
+    rows = "".join([f"<tr><td>{s['date']}</td><td>{s['item']}</td><td>{s['qty']}</td><td>{s['amount']}</td><td>{s['seller']}</td></tr>" for s in sales])
+    # Superadmin extra: add shop
+    add_shop = ""
+    if role == "superadmin":
+        add_shop = """
+        <h3>Add New Shop</h3>
+        <form method="POST" action="/add-shop"><input name="name" placeholder="New shop name" required>
+        <button>Add Shop</button></form>
+        <p>Shops:</p>
+        """
+        shops = q("SELECT * FROM shops")
+        add_shop += "<br>".join([f"• {s['name']} - <a href='/switch-shop/{s['id']}'>Open</a>" for s in shops])
+    # Manager extra: daily report form (8 fields)
+    report_form = ""
+    if role in ("manager","md"):
+        report_form = """
+        <h3>Daily Report - 8 Fields</h3>
+        <form method="POST" action="/add-report">
+        Opening <input name="opening" type="number" step="0.01"><br>
+        Closing <input name="closing" type="number" step="0.01"><br>
+        Sales <input name="sales" type="number" step="0.01"><br>
+        Purchases <input name="purchases" type="number" step="0.01"><br>
+        Expenditure <input name="expenditure" type="number" step="0.01"><br>
+        Profit <input name="profit" type="number" step="0.01"><br>
+        Bad Debt <input name="bad_debt" type="number" step="0.01"><br>
+        Debtors <input name="debtors" type="number" step="0.01"><br>
+        <button>Submit Report</button></form>
+        """
+    # Sales extra: add sale
+    sale_form = ""
+    if role in ("sales","manager"):
+        sale_form = """
+        <h3>Add Sale</h3>
+        <form method="POST" action="/add-sale">
+        Item <input name="item" required> Qty <input name="qty" type="number" value="1"> Amount <input name="amount" type="number" step="0.01" required>
+        <button>Add Sale</button></form>
+        """
+    return f"""
+    <div style="font-family:sans-serif;max-width:700px;margin:auto;padding:16px">
+    <h2>{shop_name} - {u['name']} ({role})</h2>
+    <p>Total Sales (last 20): <b>{total}</b> | <a href="/logout">Logout</a></p>
+    {add_shop} {report_form} {sale_form}
+    <h3>Recent Sales</h3>
+    <table border="1" cellpadding="6"><tr><th>Date</th><th>Item</th><th>Qty</th><th>Amount</th><th>Seller</th></tr>{rows}</table>
+    <p style="color:green">V12 Live - Postgres ON: {USE_PG}</p>
+    </div>
+    """
+
+@app.route("/add-shop", methods=["POST"])
+def add_shop():
+    if session.get("user",{}).get("role") != "superadmin": return redirect("/login")
+    name = request.form.get("name","").strip()
+    if name:
+        try: q("INSERT INTO shops (name) VALUES (?)", (name,), commit=True)
+        except: pass
+        shop = q("SELECT * FROM shops WHERE name=?", (name,), one=True)
+        for nm, rl in [("MD / CEO","md"),("Manager","manager"),("Salesperson","sales")]:
+            q("INSERT INTO users (shop_id,name,role,pin) VALUES (?,?,?,?)", (shop["id"], nm, rl, "1234"), commit=True)
+    return redirect("/dashboard")
+
+@app.route("/switch-shop/<int:sid>")
+def switch_shop(sid):
+    shop = q("SELECT * FROM shops WHERE id=?", (sid,), one=True)
+    if shop:
+        session["shop_id"] = shop["id"]; session["shop_name"] = shop["name"]
+        role = session.get("user",{}).get("role","md")
+        user = q("SELECT * FROM users WHERE shop_id=? AND role=?", (sid, role), one=True)
+        if user: session["user"] = user
+    return redirect("/dashboard")
+
+@app.route("/add-sale", methods=["POST"])
+def add_sale():
+    q("INSERT INTO sales (shop_id,item,amount,qty,seller,date) VALUES (?,?,?,?,?,?)",
+      (session["shop_id"], request.form.get("item"), float(request.form.get("amount") or 0), int(request.form.get("qty") or 1), session["user"]["name"], str(date.today())), commit=True)
+    return redirect("/dashboard")
+
+@app.route("/add-report", methods=["POST"])
+def add_report():
+    f = request.form
+    q("INSERT INTO reports (shop_id,date,opening,closing,sales,purchases,expenditure,profit,bad_debt,debtors) VALUES (?,?,?,?,?,?,?,?,?,?)",
+      (session["shop_id"], str(date.today()), float(f.get("opening") or 0), float(f.get("closing") or 0), float(f.get("sales") or 0), float(f.get("purchases") or 0), float(f.get("expenditure") or 0), float(f.get("profit") or 0), float(f.get("bad_debt") or 0), float(f.get("debtors") or 0)), commit=True)
+    return redirect("/dashboard")
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))import sqlite3, os, json, datetime, hashlib
 from flask import Flask, request, redirect, session, g, render_template_string, url_for
 app = Flask(__name__)
 app.secret_key = "omeyi-v11-secret-2026"
