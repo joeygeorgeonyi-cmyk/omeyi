@@ -8,11 +8,12 @@ app.secret_key = "omeyi-secret-key"
 DATABASE_URL = os.environ.get("DATABASE_URL")
 DB = "shop.db"
 APP_URL = "https://omeyi.onrender.com"
-PAYMENT_BANK = "Opay"
-PAYMENT_ACCOUNT = "8037372296"
-PAYMENT_NAME = "Joseph George"
+PAYMENT_BANK = "Opay"; PAYMENT_ACCOUNT = "8037372296"; PAYMENT_NAME = "Joseph George"
 PRICE_NOTICE = "(Prices may be reviewed at any time)"
 DEFAULT_PLANS = [{"name":"Monthly","amount":5000,"days":30},{"name":"Quarterly","amount":13000,"days":90},{"name":"Yearly","amount":45000,"days":365}]
+LOSS_REASONS = ["Expiry","Broken Seal/Others","Broken Bottles","Damaged","Inferior Products"]
+DEBTOR_REASONS = ["Regular/Loyal Customers","Failed POS Transactions","Network Problem","Cut Price","Bonanza","Others"]
+TIMELINES = ["1-3 days","4-7 days","8-10 days","10-14 days"]
 class PGWrapper:
     def __init__(self, conn): self.conn = conn
     def cursor(self): return PGCursor(self.conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor))
@@ -70,12 +71,22 @@ def upsert_settings(sid, md, mg):
     try: conn.execute("INSERT INTO shop_settings (shop_id, md_phone, manager_phone) VALUES (?,?,?)",(sid,md,mg))
     except: conn.execute("UPDATE shop_settings SET md_phone=?, manager_phone=? WHERE shop_id=?",(md,mg,sid))
     conn.commit()
-def period_start(period):
+# --- V10 PERIOD LOGIC: 13 & 14 ---
+def period_bounds(period):
     t=datetime.date.today()
-    if period=='today': return t.isoformat()
-    if period=='week': return (t-datetime.timedelta(days=7)).isoformat()
-    if period=='month': return (t-datetime.timedelta(days=30)).isoformat()
-    return '0000-01-01'
+    if period=='today': return t.isoformat(), t.isoformat()
+    if period=='week': return (t-datetime.timedelta(days=7)).isoformat(), t.isoformat()
+    if period=='month': return (t-datetime.timedelta(days=30)).isoformat(), t.isoformat()
+    if period=='quarter': return (t-datetime.timedelta(days=90)).isoformat(), t.isoformat()
+    if period=='year': return (t-datetime.timedelta(days=365)).isoformat(), t.isoformat()
+    return '0000-01-01', '9999-12-31'
+def in_period(date_str, period):
+    s,e=period_bounds(period)
+    return s <= str(date_str or '') <= e
+def period_totals(rows, date_field='date'):
+    t=datetime.date.today()
+    def s(days): return sum(float(safe(r,'total') or safe(r,'amount') or 0) for r in rows if str(safe(r,date_field) or '') >= (t-datetime.timedelta(days=days)).isoformat())
+    return {"today":s(0),"week":s(7),"month":s(30),"quarter":s(90),"year":s(365)}
 def init_db():
     conn=get_db()
     conn.execute("CREATE TABLE IF NOT EXISTS shops (id INTEGER PRIMARY KEY, name TEXT, admin_user TEXT, admin_pass TEXT, is_active INTEGER DEFAULT 1)")
@@ -97,10 +108,10 @@ def init_db():
     conn.commit(); conn.close()
 init_db()
 def blocked_msg(m="You are not allowed to post this."): return f"{m} <a href='/shop'>Go Back</a>"
-STYLE="""<style>*{box-sizing:border-box}body{font-family:'Segoe UI',Arial,sans-serif;margin:0;background:#eaf0f7;color:#1e293b;padding-bottom:40px}.top{background:linear-gradient(135deg,#0b3d91,#0b5ed7 55%,#0ea5e9);color:#fff;padding:18px 16px;border-bottom:4px solid #f59e0b}.top a{color:#fde68a;font-weight:700}.omeyi{font-size:12px;color:#bfdbfe;margin:0;letter-spacing:3px;text-transform:uppercase;font-weight:800}h1{font-size:24px;margin:6px 0 2px}.sub{color:#dbeafe;font-size:13px;margin:0}.wrap{padding:0 12px 30px;max-width:960px;margin:auto}.card{background:#fff;padding:16px;border-radius:16px;margin-bottom:14px;box-shadow:0 4px 14px rgba(11,61,145,.10);border:1px solid #dbeafe}label{font-size:12px;font-weight:800;color:#0b3d91;text-transform:uppercase}input,select,textarea{padding:12px;margin:6px 0 11px;width:100%;border:1.5px solid #cbd5e1;border-radius:10px;font-size:14px;background:#f8fafc}button{padding:13px;background:#0b3d91;color:#fff;border:none;border-radius:11px;cursor:pointer;width:100%;font-weight:800}button.green{background:#16a34a}button.orange{background:#ea580c}button.blue{background:#0b5ed7}button.red{background:#dc2626}button.small{padding:8px 11px;width:auto;font-size:12px}table{width:100%;border-collapse:collapse}th{background:#0b3d91;color:#fff;padding:11px 8px;font-size:11px;text-align:left}td{padding:11px 8px;font-size:13px;border-bottom:1px solid #e2e8f0}.section{font-size:18px;font-weight:900;margin:20px 2px 10px;color:#0b3d91}.muted{font-size:12px;color:#64748b}.grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}.grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px}.footer{text-align:center;color:#64748b;font-size:12px;padding:18px 0}.row-card{background:#fff;padding:13px;border-radius:12px;margin-bottom:9px;display:flex;justify-content:space-between;border-left:6px solid #0b5ed7}.meter{background:#e2e8f0;height:12px;border-radius:8px;overflow:hidden}.meter>div{background:linear-gradient(90deg,#0b3d91,#0ea5e9);height:12px}.logout{background:#dc2626!important}</style>"""
+STYLE="""<style>*{box-sizing:border-box}body{font-family:'Segoe UI',Arial,sans-serif;margin:0;background:#eaf0f7;color:#1e293b;padding-bottom:40px}.top{background:linear-gradient(135deg,#0b3d91,#0b5ed7 55%,#0ea5e9);color:#fff;padding:18px 16px;border-bottom:4px solid #f59e0b}.top a{color:#fde68a;font-weight:700}.omeyi{font-size:12px;color:#bfdbfe;margin:0;letter-spacing:3px;text-transform:uppercase;font-weight:800}h1{font-size:24px;margin:6px 0 2px}.sub{color:#dbeafe;font-size:13px;margin:0}.wrap{padding:0 12px 30px;max-width:960px;margin:auto}.card{background:#fff;padding:16px;border-radius:16px;margin-bottom:14px;box-shadow:0 4px 14px rgba(11,61,145,.10);border:1px solid #dbeafe}label{font-size:12px;font-weight:800;color:#0b3d91;text-transform:uppercase}input,select,textarea{padding:12px;margin:6px 0 11px;width:100%;border:1.5px solid #cbd5e1;border-radius:10px;font-size:14px;background:#f8fafc}button{padding:13px;background:#0b3d91;color:#fff;border:none;border-radius:11px;cursor:pointer;width:100%;font-weight:800}button.green{background:#16a34a}button.orange{background:#ea580c}button.blue{background:#0b5ed7}button.red{background:#dc2626}button.small{padding:8px 11px;width:auto;font-size:12px}table{width:100%;border-collapse:collapse}th{background:#0b3d91;color:#fff;padding:11px 8px;font-size:11px;text-align:left}td{padding:11px 8px;font-size:13px;border-bottom:1px solid #e2e8f0}.section{font-size:18px;font-weight:900;margin:20px 2px 10px;color:#0b3d91}.muted{font-size:12px;color:#64748b}.grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}.grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px}.footer{text-align:center;color:#64748b;font-size:12px;padding:18px 0}.row-card{background:#fff;padding:13px;border-radius:12px;margin-bottom:9px;display:flex;justify-content:space-between;border-left:6px solid #0b5ed7}.meter{background:#e2e8f0;height:12px;border-radius:8px;overflow:hidden}.meter>div{background:linear-gradient(90deg,#0b3d91,#0ea5e9);height:12px}.logout{background:#dc2626!important}.pie{width:150px;height:150px;border-radius:50%;margin:auto}.period-box{background:#fff7ed;border:2px solid #f59e0b;padding:12px;border-radius:12px;margin-bottom:14px}</style>"""
 FOOTER='<div class="footer">© Omeyi • All Rights Reserved • Powered by Omeyi Blue</div>'
 QR_IMG=f"https://api.qrserver.com/v1/create-qr-code/?size=180x180&data={APP_URL}"
-def top(t,s=""): return f'<div class="top"><p class="omeyi">Omeyi</p><h1>{t}</h1><p class="sub">{s}</p></div><div class="wrap" style="margin-top:16px">'
+def top(t,s=""): return f'<div class="top"><p class="omeyi">Omeyi</p><h1>{t}</h1><p class="sub">{s}</p></div><div class="wrap" style="margin-top:16px">"
 def end(): return "</div>"+FOOTER
 def logout_bar(): return """<div class="card" style="display:flex;gap:10px"><a href="/change-password" style="flex:1"><button class="blue">🔑 Change Password</button></a><a href="/logout" style="flex:1"><button class="logout">🚪 LOGOUT — Click Here To Log Out</button></a></div>"""
 def needs_pwd_change(r):
@@ -112,10 +123,18 @@ def needs_pwd_change(r):
         dt=datetime.date.fromisoformat(str(d)[:10])
         return (datetime.date.today()-dt).days>=90
     except: return False
+def period_selector(period):
+    opts=[('today','Today'),('week','This Week'),('month','This Month'),('quarter','This Quarter'),('year','This Year'),('all','All Time — Call Old Records')]
+    o="".join([f"<option value='{v}' {'selected' if period==v else ''}>{l}</option>" for v,l in opts])
+    return f"<div class='period-box'><form method='get' action='/shop'><label>📅 Choose Period — Previous Period Records No Go Show Unless You Call Am</label><select name='period' onchange='this.form.submit()'>{o}</select></form><p class='muted'>Each new Day/Week/Month/Quarter/Year starts with only Summary: Yesterday Closing = Today Opening.</p></div>"
 @app.route("/", methods=["GET","POST"])
 def login():
+    conn=get_db()
+    try: shops=conn.execute("SELECT * FROM shops ORDER BY name").fetchall()
+    except: shops=[]
+    shop_opts="".join([f"<option value='{s['id']}'>{s['name']} (ID {s['id']})</option>" for s in shops])
     if request.method=="POST":
-        u=request.form.get("username","").strip(); p=request.form.get("password","").strip(); conn=get_db()
+        u=request.form.get("username","").strip(); p=request.form.get("password","").strip()
         if u=="superadmin" and p=="omeyi123":
             session.update(role="superadmin",username="superadmin",shop_id=0,name="Super Admin"); return redirect("/superadmin")
         r=conn.execute("SELECT * FROM users WHERE username=? AND password=?",(u,p)).fetchone()
@@ -130,7 +149,7 @@ def login():
             if not s["is_active"]: return STYLE+top("Shop OFF","")+f"<div class='card'><h3>⛔ Shop Subscription OFF</h3><p>Super Admin don put this shop OFF.</p><a href='/'>Go Back</a></div>"+end()
             session.update(role="owner",username=u,shop_id=s["id"],name=s["name"]); return redirect("/shop")
         return STYLE+top("Login","Wrong username or password")+"<div class='card'><p>Wrong login. <a href='/'>Try again</a></p></div>"+end()
-    return STYLE+top("Login","Welcome back")+f"""<div class="card" style="text-align:center"><img src="{QR_IMG}" style="width:150px;border-radius:12px;border:6px solid #fff"><p><b>Scan to open Omeyi</b><br><span class="muted">{APP_URL}</span></p></div><div class="card"><form method="post"><label>Username</label><input name="username" required><label>Password</label><input name="password" type="password" required><button>LOGIN</button></form></div><div class="card"><b>New Shop?</b> <a href="/subscription">View Subscription Plans</a><br><span class="muted">Pay to {PAYMENT_BANK} {PAYMENT_ACCOUNT} ({PAYMENT_NAME}) - {PRICE_NOTICE}</span></div>"""+end()
+    return STYLE+top("Login","Welcome back")+f"""<div class="card" style="text-align:center"><img src="{QR_IMG}" style="width:150px;border-radius:12px;border:6px solid #fff"><p><b>Scan to open Omeyi</b><br><span class="muted">{APP_URL}</span></p></div><div class="card"><form method="post"><label>Shop / Company — Select Your Shop</label><select name="shop_id"><option value="">-- Select Shop / Company --</option>{shop_opts}</select><label>Username</label><input name="username" required><label>Password</label><input name="password" type="password" required><button>LOGIN</button></form></div><div class="card"><b>New Shop?</b> <a href="/subscription">View Subscription Plans</a><br><span class="muted">Pay to {PAYMENT_BANK} {PAYMENT_ACCOUNT} ({PAYMENT_NAME}) - {PRICE_NOTICE}</span></div>"""+end()
 @app.route("/logout")
 def logout(): session.clear(); return redirect("/")
 @app.route("/change-password", methods=["GET","POST"])
@@ -153,14 +172,9 @@ def superadmin():
     conn=get_db(); shops=conn.execute("SELECT * FROM shops ORDER BY id DESC").fetchall()
     traffic=[]
     for s in shops:
-        sc=conn.execute("SELECT COUNT(*) as c FROM sales WHERE shop_id=?",(s["id"],)).fetchone()
-        pc=conn.execute("SELECT COUNT(*) as c FROM purchases WHERE shop_id=?",(s["id"],)).fetchone()
-        rc=conn.execute("SELECT COUNT(*) as c FROM requests WHERE shop_id=?",(s["id"],)).fetchone()
-        uc=conn.execute("SELECT COUNT(*) as c FROM users WHERE shop_id=?",(s["id"],)).fetchone()
-        total=int(safe(sc,'c'))+int(safe(pc,'c'))+int(safe(rc,'c'))+int(safe(uc,'c'))
-        traffic.append({"shop":s,"sales":int(safe(sc,'c')),"purchases":int(safe(pc,'c')),"total":total})
-    traffic_sorted=sorted(traffic, key=lambda x: x["total"], reverse=True)
-    max_t=max([t["total"] for t in traffic_sorted], default=1) or 1
+        sc=conn.execute("SELECT COUNT(*) as c FROM sales WHERE shop_id=?",(s["id"],)).fetchone(); pc=conn.execute("SELECT COUNT(*) as c FROM purchases WHERE shop_id=?",(s["id"],)).fetchone(); rc=conn.execute("SELECT COUNT(*) as c FROM requests WHERE shop_id=?",(s["id"],)).fetchone(); uc=conn.execute("SELECT COUNT(*) as c FROM users WHERE shop_id=?",(s["id"],)).fetchone()
+        total=int(safe(sc,'c'))+int(safe(pc,'c'))+int(safe(rc,'c'))+int(safe(uc,'c')); traffic.append({"shop":s,"sales":int(safe(sc,'c')),"purchases":int(safe(pc,'c')),"total":total})
+    traffic_sorted=sorted(traffic, key=lambda x: x["total"], reverse=True); max_t=max([t["total"] for t in traffic_sorted], default=1) or 1
     rows="".join([f"<tr><td>{t['shop']['name']}</td><td>{t['shop']['admin_user']}</td><td>{'🟢 ON' if t['shop']['is_active'] else '🔴 OFF'}</td><td>{t['sales']} sales / {t['purchases']} purch</td><td><b>{t['total']}</b></td><td><a href='/enter-shop/{t['shop']['id']}'><b>Enter</b></a> | <a href='/edit-shop/{t['shop']['id']}'>Edit</a> | <a href='/toggle-shop/{t['shop']['id']}'>ON/OFF</a> | <a href='/delete-shop/{t['shop']['id']}' onclick=\"return confirm('Delete this shop?')\" style='color:#dc2626;font-weight:800'>Delete</a></td></tr>" for t in traffic_sorted])
     meter="".join([f"<div class='row-card'><div><b>#{i+1} {t['shop']['name']}</b> — {t['total']} activities<br><div class='meter' style='width:220px;margin-top:6px'><div style='width:{int(t['total']/max_t*100) if max_t else 0}%'></div></div></div><b>{t['total']}</b></div>" for i,t in enumerate(traffic_sorted)])
     shop_opts="".join([f"<option value='{s['id']}'>{s['name']} (ID {s['id']})</option>" for s in shops])
@@ -211,127 +225,179 @@ def enter_shop(sid):
     if session.get('role')!='superadmin': return blocked_msg()
     conn=get_db(); s=conn.execute("SELECT * FROM shops WHERE id=?",(sid,)).fetchone()
     if not s: return "Shop not found"
-    session.update(role="owner",username=s["admin_user"],shop_id=s["id"],name=s["name"])
-    return redirect("/shop")
+    session.update(role="owner",username=s["admin_user"],shop_id=s["id"],name=s["name"]); return redirect("/shop")
 @app.route("/shop")
 def shop():
     if 'role' not in session: return redirect("/")
-    conn=get_db(); sid=session.get('shop_id'); role=session.get('role')
-    period=request.args.get("period","all")
-    pstart=period_start(period)
+    conn=get_db(); sid=session.get('shop_id'); role=session.get('role'); me=session.get('username')
+    period=request.args.get("period","today")
+    p_start,p_end=period_bounds(period)
     shop_rec=None
     try: shop_rec=conn.execute("SELECT * FROM shops WHERE id=?",(sid,)).fetchone()
     except: pass
-    staff_list=conn.execute("SELECT * FROM users WHERE shop_id=? ORDER BY id",(sid,)).fetchall() if sid else []
-    sales_all=conn.execute("SELECT * FROM sales WHERE shop_id=?",(sid,)).fetchall(); purch=conn.execute("SELECT * FROM purchases WHERE shop_id=?",(sid,)).fetchall()
-    sales=[s for s in sales_all if str(safe(s,'date') or '')>=pstart] if period!='all' else sales_all
-    sales_total=sum(float(safe(r,'total') or 0) for r in sales_all); purch_total=sum(float(safe(r,'total') or 0) for r in purch); profit=sum((float(safe(r,'selling_price') or 0)-float(safe(r,'cost_price') or 0))*float(safe(r,'qty') or 0) for r in sales_all)
-    debtors=conn.execute("SELECT * FROM debtors WHERE shop_id=? ORDER BY id DESC LIMIT 30",(sid,)).fetchall(); creditors=conn.execute("SELECT * FROM creditors WHERE shop_id=? ORDER BY id DESC LIMIT 30",(sid,)).fetchall()
-    expenses=conn.execute("SELECT * FROM expenses WHERE shop_id=? ORDER BY id DESC LIMIT 30",(sid,)).fetchall(); losses=conn.execute("SELECT * FROM losses WHERE shop_id=? ORDER BY id DESC LIMIT 30",(sid,)).fetchall()
-    requests_list=conn.execute("SELECT * FROM requests WHERE shop_id=? ORDER BY id DESC LIMIT 30",(sid,)).fetchall(); submissions=conn.execute("SELECT * FROM submissions WHERE shop_id=? ORDER BY id DESC LIMIT 30",(sid,)).fetchall(); alerts=conn.execute("SELECT * FROM alert_requests WHERE shop_id=? ORDER BY id DESC LIMIT 30",(sid,)).fetchall()
-    items={}
-    for r in purch:
-        it=r["item"]; items.setdefault(it,{"item":it,"purch_qty":0,"sales_qty":0,"cost_price":safe(r,'cost_price'),"selling_price":safe(r,'selling_price'),"expiry_date":safe(r,'expiry_date'),"min_stock":safe(r,'min_stock'),"max_stock":safe(r,'max_stock')}); items[it]["purch_qty"]+=float(safe(r,'qty') or 0)
-    for r in sales_all:
-        it=r["item"]; items.setdefault(it,{"item":it,"purch_qty":0,"sales_qty":0,"cost_price":0,"selling_price":0,"expiry_date":"","min_stock":0,"max_stock":0}); items[it]["sales_qty"]+=float(safe(r,'qty') or 0)
+    staff_list=conn.execute("SELECT * FROM users WHERE shop_id=? AND role!='owner' ORDER BY id",(sid,)).fetchall() if sid else []
+    sales_all_raw=conn.execute("SELECT * FROM sales WHERE shop_id=?",(sid,)).fetchall(); purch_all_raw=conn.execute("SELECT * FROM purchases WHERE shop_id=?",(sid,)).fetchall()
+    # V10 13/14: filter to current period only, unless All Time
+    sales_all=[s for s in sales_all_raw if in_period(safe(s,'date'),period)] if period!='all' else sales_all_raw
+    purch=[p for p in purch_all_raw if in_period(safe(p,'date'),period)] if period!='all' else purch_all_raw
+    sales=sales_all
+    # Opening = stock BEFORE period start. Closing = Opening + Purchases in period - Sales in period
+    open_items={}
+    for r in purch_all_raw:
+        if str(safe(r,'date') or '') < p_start:
+            it=r["item"]; open_items.setdefault(it,{"qty":0,"cost":safe(r,'cost_price'),"sell":safe(r,'selling_price')}); open_items[it]["qty"]+=float(safe(r,'qty') or 0)
+    for r in sales_all_raw:
+        if str(safe(r,'date') or '') < p_start:
+            it=r["item"]; open_items.setdefault(it,{"qty":0,"cost":0,"sell":0}); open_items[it]["qty"]-=float(safe(r,'qty') or 0)
+    opening_cost=sum(v["qty"]*float(v["cost"] or 0) for v in open_items.values())
+    opening_sell=sum(v["qty"]*float(v["sell"] or 0) for v in open_items.values())
+    # Full stock for inventory display = opening + all purchases - all sales up to end of period
+    full_items={}
+    for r in purch_all_raw:
+        if str(safe(r,'date') or '') <= p_end:
+            it=r["item"]; full_items.setdefault(it,{"item":it,"purch_qty":0,"sales_qty":0,"cost_price":safe(r,'cost_price'),"selling_price":safe(r,'selling_price'),"expiry_date":safe(r,'expiry_date'),"min_stock":safe(r,'min_stock'),"max_stock":safe(r,'max_stock')}); full_items[it]["purch_qty"]+=float(safe(r,'qty') or 0)
+    for r in sales_all_raw:
+        if str(safe(r,'date') or '') <= p_end:
+            it=r["item"]; full_items.setdefault(it,{"item":it,"purch_qty":0,"sales_qty":0,"cost_price":0,"selling_price":0,"expiry_date":"","min_stock":0,"max_stock":0}); full_items[it]["sales_qty"]+=float(safe(r,'qty') or 0)
     combined=[]
-    for it,d in items.items():
+    for it,d in full_items.items():
         d["remaining"]=d["purch_qty"]-d["sales_qty"]; d["profit"]=(float(d["selling_price"] or 0)-float(d["cost_price"] or 0))*d["sales_qty"]
         d["status"]="⛔ Out" if d["remaining"]<=0 else ("⚠️ Low" if d["min_stock"] and d["remaining"]<=float(d["min_stock"]) else "✅ In Stock"); combined.append(d)
-    # PERFORMANCE REPORT - V8
+    stock_val_cost=sum(float(r["remaining"])*float(r["cost_price"] or 0) for r in combined)
+    stock_val_sell=sum(float(r["remaining"])*float(r["selling_price"] or 0) for r in combined)
+    closing_cost=stock_val_cost; closing_sell=stock_val_sell
+    sales_total=sum(float(safe(r,'total') or 0) for r in sales_all); purch_total=sum(float(safe(r,'total') or 0) for r in purch)
+    gross_profit=sum((float(safe(r,'selling_price') or 0)-float(safe(r,'cost_price') or 0))*float(safe(r,'qty') or 0) for r in sales_all)
+    debtors_raw=conn.execute("SELECT * FROM debtors WHERE shop_id=? ORDER BY id DESC LIMIT 100",(sid,)).fetchall(); creditors_raw=conn.execute("SELECT * FROM creditors WHERE shop_id=? ORDER BY id DESC LIMIT 100",(sid,)).fetchall()
+    debtors=[d for d in debtors_raw if in_period(safe(d,'date'),period)] if period!='all' else debtors_raw
+    creditors=[c for c in creditors_raw if in_period(safe(c,'date'),period)] if period!='all' else creditors_raw
+    expenses_raw=conn.execute("SELECT * FROM expenses WHERE shop_id=? ORDER BY id DESC LIMIT 100",(sid,)).fetchall(); losses_raw=conn.execute("SELECT * FROM losses WHERE shop_id=? ORDER BY id DESC LIMIT 100",(sid,)).fetchall()
+    expenses=[e for e in expenses_raw if in_period(safe(e,'date'),period)] if period!='all' else expenses_raw
+    losses=[l for l in losses_raw if in_period(safe(l,'date'),period)] if period!='all' else losses_raw
+    total_losses=sum(float(safe(r,'amount') or 0) for r in losses); total_exp=sum(float(safe(r,'amount') or 0) for r in expenses)
+    profit_loss=gross_profit-total_losses-total_exp
+    requests_list_raw=conn.execute("SELECT * FROM requests WHERE shop_id=? ORDER BY id DESC LIMIT 50",(sid,)).fetchall(); submissions_raw=conn.execute("SELECT * FROM submissions WHERE shop_id=? ORDER BY id DESC LIMIT 50",(sid,)).fetchall(); alerts=conn.execute("SELECT * FROM alert_requests WHERE shop_id=? ORDER BY id DESC LIMIT 30",(sid,)).fetchall()
+    requests_list=[r for r in requests_list_raw if in_period(safe(r,'date'),period)] if period!='all' else requests_list_raw
+    submissions=[s for s in submissions_raw if in_period(safe(s,'date'),period)] if period!='all' else submissions_raw
     perf={}
     for r in sales:
         it=r["item"]; perf.setdefault(it,{"item":it,"qty":0,"profit":0,"total":0})
         perf[it]["qty"]+=float(safe(r,'qty') or 0); perf[it]["profit"]+=(float(safe(r,'selling_price') or 0)-float(safe(r,'cost_price') or 0))*float(safe(r,'qty') or 0); perf[it]["total"]+=float(safe(r,'total') or 0)
-    perf_list=list(perf.values())
-    most_selling=sorted(perf_list, key=lambda x: x["qty"], reverse=True)[:5]
-    most_profit=sorted(perf_list, key=lambda x: x["profit"], reverse=True)[:5]
+    perf_list=list(perf.values()); most_selling=sorted(perf_list, key=lambda x: x["qty"], reverse=True)[:5]; most_profit=sorted(perf_list, key=lambda x: x["profit"], reverse=True)[:5]
+    auto_alerts=[]
+    for r in combined:
+        if r["min_stock"] and r["remaining"]<=float(r["min_stock"]) and r["remaining"]>0: auto_alerts.append(f"⚠️ LOW STOCK: {r['item']} — {r['remaining']} remain (Min {r['min_stock']}) — Expedited Action Needed")
+        if r["remaining"]<=0: auto_alerts.append(f"⛔ OUT OF STOCK: {r['item']} — 0 remain")
+        if r["expiry_date"]:
+            try:
+                exp=datetime.date.fromisoformat(str(r["expiry_date"])[:10]); days=(exp-datetime.date.today()).days
+                if 0<=days<=30: auto_alerts.append(f"⏰ EXPIRY ALERT: {r['item']} — Expires {r['expiry_date']} ({days} days left) — Expedited Action Needed")
+                elif days<0: auto_alerts.append(f"🚨 EXPIRED: {r['item']} — Expired {r['expiry_date']}")
+            except: pass
+    tl_opts="".join([f"<option>{t}</option>" for t in TIMELINES]); dr_opts="".join([f"<option>{t}</option>" for t in DEBTOR_REASONS]); lr_opts="".join([f"<option>{t}</option>" for t in LOSS_REASONS])
     if role=='sales':
-        html=STYLE+top(f"Welcome, {session.get('name')} (Salesperson)",f"Shop ID {sid} • Today {today_str()}")
-        html+=logout_bar()
-        html+="<div class='section'>📦 Items In Stock — List + Quantity Only</div><div class='card'><table><tr><th>Item</th><th>Quantity In Stock</th></tr>"
-        for r in combined: html+=f"<tr><td><b>{r['item']}</b></td><td>{r['remaining']}</td></tr>"
+        my_sales_all=[s for s in sales_all_raw if s['created_by']==me]; my_debt_all=[d for d in debtors_raw if d['created_by']==me]
+        my_sales=[s for s in my_sales_all if in_period(safe(s,'date'),period)] if period!='all' else my_sales_all
+        my_debt=[d for d in my_debt_all if in_period(safe(d,'date'),period)] if period!='all' else my_debt_all
+        st=period_totals(my_sales_all); dt=period_totals(my_debt_all,'date')
+        html=STYLE+top(f"Welcome, {session.get('name')} (Salesperson)",f"Shop ID {sid} • Period: {period.upper()} • Today {today_str()}")
+        html+=logout_bar()+period_selector(period)
+        html+=f"""<div class="card" style="background:#ecfdf5;border:2px solid #16a34a"><b>📦 Opening Stock This Period (Closing of Last Period)</b><table><tr><th>Opening Cost</th><td>{fmt(opening_cost)}</td></tr><tr><th>Opening Selling</th><td>{fmt(opening_sell)}</td></tr><tr><th>Closing Cost</th><td>{fmt(closing_cost)}</td></tr><tr><th>Closing Selling</th><td>{fmt(closing_sell)}</td></tr></table><p class="muted">Closing = Opening + Purchases in period - Sales in period. This Closing go be Opening for Next Period.</p></div>"""
+        html+=f"""<div class="section">📊 My Breakdown — Sales & Debtors Totals</div><div class="card"><table><tr><th>Period</th><th>My Sales Total</th><th>My Debtors Total</th></tr><tr><td>Today</td><td>{fmt(st['today'])}</td><td>{fmt(dt['today'])}</td></tr><tr><td>This Week</td><td>{fmt(st['week'])}</td><td>{fmt(dt['week'])}</td></tr><tr><td>This Month</td><td>{fmt(st['month'])}</td><td>{fmt(dt['month'])}</td></tr><tr><td>This Quarter</td><td>{fmt(st['quarter'])}</td><td>{fmt(dt['quarter'])}</td></tr><tr><td>This Year</td><td>{fmt(st['year'])}</td><td>{fmt(dt['year'])}</td></tr></table><p class="muted">Totals below table show only current period records.</p></div>"""
+        html+="<div class='section'>📦 Inventory / Stock List — With Cost + Selling Price</div><div class='card'><table><tr><th>Item</th><th>Qty In Stock</th><th>Cost Price</th><th>Selling Price</th><th>Status</th></tr>"
+        for r in combined: html+=f"<tr><td><b>{r['item']}</b></td><td>{r['remaining']}</td><td>{fmt(r['cost_price'])}</td><td>{fmt(r['selling_price'])}</td><td>{r['status']}</td></tr>"
         html+="</table></div>"
         opts="".join([f"<option value='{r['item']}'>{r['item']} - Available {r['remaining']}</option>" for r in combined if r['remaining']>0])
-        html+=f"""<div class="section">🛒 My Sales — Add Sale</div><div class="card"><form method="post" action="/sell"><label>Item</label><select name="item">{opts}</select><div class="grid2"><div><label>Qty</label><input name="qty" type="number" step="any" required></div><div><label>Selling Price (₦) Per One</label><input name="price" type="number" step="any" required></div></div><label>Or new item</label><input name="item_new"><button class="green">ADD SALE</button></form></div>"""
-        html+="<div class='section'>👥 My Debtors — See & Settle (Sales + Admin Only)</div><div class='card'><form method='post' action='/add_debtor'><label>Customer Name</label><input name='name' required><label>Amount (₦)</label><input name='amount' type='number' step='any' required><label>Phone</label><input name='phone'><label>Item / Reason</label><input name='item'><button>Add Debtor</button></form><hr>"
-        for r in debtors: html+=f"<div class='row-card'><div><b>{r['name']}</b> - {fmt(r['amount'])} - {r['status']} - {r['item']}</div><a href='/settle_debtor/{r['id']}'><button class='small green'>Settle</button></a></div>"
+        html+=f"""<div class="section">🛒 My Sales — Add Sale (Current Period Only)</div><div class="card"><form method="post" action="/sell"><label>Item</label><select name="item">{opts}</select><div class="grid2"><div><label>Qty</label><input name="qty" type="number" step="any" required></div><div><label>Selling Price (₦) Per One</label><input name="price" type="number" step="any" required></div></div><label>Or new item</label><input name="item_new"><button class="green">ADD SALE</button></form></div>"""
+        html+=f"<div class='section'>👥 My Debtors — See & Settle Full / Partial + Timeline (Current Period Only)</div><div class='card'><form method='post' action='/add_debtor'><label>Customer Name</label><input name='name' required><label>Amount (₦)</label><input name='amount' type='number' step='any' required><label>Phone</label><input name='phone'><label>Item</label><input name='item'><label>Reason For Debtor</label><select name='reason'>{dr_opts}</select><label>Settlement Timeline</label><select name='timeframe'>{tl_opts}</select><button>Add Debtor</button></form><hr>"
+        for r in my_debt:
+            bal=float(safe(r,'amount') or 0)-float(safe(r,'paid_amount') or 0)
+            html+=f"<div class='row-card'><div><b>{r['name']}</b> - Total {fmt(r['amount'])} | Paid {fmt(safe(r,'paid_amount'))} | Balance {fmt(bal)} - {r['status']} - {r['item']} - Reason: {r['reason']} - Timeline: {r['timeframe']}</div><a href='/settle_debtor_form/{r['id']}'><button class='small green'>Settle Full / Partial</button></a></div>"
         html+="</div>"
-        html+="<div class='section'>🧾 My Sales Records</div><div class='card'><table><tr><th>Item</th><th>Qty</th><th>Total</th><th>Date</th></tr>"
-        for r in sales_all: html+=f"<tr><td>{r['item']}</td><td>{r['qty']}</td><td>{fmt(safe(r,'total'))}</td><td>{r['date']}</td></tr>"
+        html+="<div class='section'>🧾 My Sales Records — Current Period Only</div><div class='card'><table><tr><th>Item</th><th>Qty</th><th>Total</th><th>Date</th></tr>"
+        for r in my_sales: html+=f"<tr><td>{r['item']}</td><td>{r['qty']}</td><td>{fmt(safe(r,'total'))}</td><td>{r['date']}</td></tr>"
         html+="</table></div>"
         return html+logout_bar()+end()
-    html=STYLE+top(f"Welcome, {session.get('name')} ({display_role(role)})",f"Shop ID {sid} • Today {today_str()}")
-    html+=logout_bar()
+    html=STYLE+top(f"Welcome, {session.get('name')} ({display_role(role)})",f"Shop ID {sid} • Period: {period.upper()} • Today {today_str()}")
+    html+=logout_bar()+period_selector(period)
     if role=='owner' and shop_rec:
-        html+=f"""<div class="card" style="border:2px solid #0b3d91"><div class="section" style="margin:0 0 10px">👑 MD/CEO Details — View Only, No Posts, No Settle</div><table><tr><th>Name</th><td><b>{shop_rec['name']}</b></td></tr><tr><th>Designation</th><td><b>MD/CEO</b></td></tr><tr><th>Shop Name</th><td>{shop_rec['name']}</td></tr><tr><th>Shop ID</th><td>{sid}</td></tr></table><p class="muted">MD cannot see passwords. MD cannot settle Debtors/Creditors. MD inputs = Remarks for Approvals only.</p></div>"""
-    if role in ['owner','manager']:
-        html+="<div class='section'>👥 Staff List + Performance — NO PASSWORDS</div><div class='card'><table><tr><th>Name</th><th>Designation</th><th>Username</th><th>Performance</th></tr>"
+        html+=f"""<div class="card" style="border:2px solid #0b3d91"><div class="section" style="margin:0 0 10px">👑 MD/CEO Details — View Only, No Posts, No Settle</div><table><tr><th>Name</th><td><b>{shop_rec['name']}</b></td></tr><tr><th>Designation</th><td><b>MD/CEO</b></td></tr><tr><th>Shop Name</th><td>{shop_rec['name']}</td></tr><tr><th>Shop ID</th><td>{sid}</td></tr></table></div>"""
+    if role=='owner':
+        html+="<div class='section'>👥 Staff List + Performance — MD ONLY (MD Off The List)</div><div class='card'><table><tr><th>Name</th><th>Designation</th><th>Username</th><th>Performance</th></tr>"
         for u in staff_list:
-            sc=sum(1 for s in sales_all if s['created_by']==u['username']); pc=sum(1 for s in purch if s['created_by']==u['username']); rc=sum(1 for s in requests_list if s['created_by']==u['username'])
+            sc=sum(1 for s in sales_all_raw if s['created_by']==u['username']); pc=sum(1 for s in purch_all_raw if s['created_by']==u['username']); rc=sum(1 for s in requests_list_raw if s['created_by']==u['username'])
             html+=f"<tr><td><b>{u['name']}</b></td><td>{display_role(u['role'])}</td><td>{u['username']}</td><td>{sc} sales / {pc} purch / {rc} req</td></tr>"
-        html+="</table><p class='muted'>Only Super Admin creates staff.</p></div>"
-    html+=f"""<div class="card"><b>Totals:</b> Sales {fmt(sales_total)} | Purchases {fmt(purch_total)} | Profit {fmt(profit)}<br><br><div class="grid2"><a href="/subscription"><button class="orange">💳 Subscription - View Plans & Pay</button></a><a href="/shop-settings"><button class="blue">⚙️ WhatsApp Settings - Notifications to MD & Manager Only</button></a></div>{'<a href="/print-transactions"><button style="margin-top:10px">🖨️ Print Transactions (MD & Manager)</button></a>' if role in ['owner','manager'] else ''}</div>"""
-    # PERFORMANCE REPORT V8 - WITH PERIOD
-    html+=f"""<div class='section'>🏆 Performance Report — Most Selling & Most Profitable — Period: {period.upper()}</div><div class='card'><form method='get' action='/shop'><label>Choose Period</label><select name='period' onchange='this.form.submit()'><option value='all' {'selected' if period=='all' else ''}>All Time</option><option value='today' {'selected' if period=='today' else ''}>Today</option><option value='week' {'selected' if period=='week' else ''}>This Week (Last 7 Days)</option><option value='month' {'selected' if period=='month' else ''}>This Month (Last 30 Days)</option></select></form><br><div class='grid2'><div><b>🔥 Most Selling (By Qty)</b><table><tr><th>Product</th><th>Qty Sold</th><th>Total</th></tr>{''.join([f"<tr><td><b>{x['item']}</b></td><td>{x['qty']}</td><td>{fmt(x['total'])}</td></tr>" for x in most_selling]) or '<tr><td colspan=3>No sales in this period</td></tr>'}</table></div><div><b>💰 Most Profitable (By Profit)</b><table><tr><th>Product</th><th>Profit</th><th>Qty</th></tr>{''.join([f"<tr><td><b>{x['item']}</b></td><td>{fmt(x['profit'])}</td><td>{x['qty']}</td></tr>" for x in most_profit]) or '<tr><td colspan=3>No sales in this period</td></tr>'}</table></div></div></div>"""
-    html+="<div class='section'>📦 Stock / Inventory</div><div class='card'><table><tr><th>Item</th><th>Purchased</th><th>Sold</th><th>Remaining</th><th>Cost</th><th>Selling</th><th>Expiry</th><th>Status</th></tr>"
+        html+="</table><p class='muted'>Only Super Admin creates staff. MD only can view this list.</p></div>"
+    if role in ['owner','manager']:
+        html+=f"""<div class="card"><b>📊 Dashboard Totals — MD & Manager — Current Period ({period.upper()})</b><table><tr><th>Total Stock Value (Cost) — Closing</th><td>{fmt(stock_val_cost)}</td></tr><tr><th>Total Stock Value (Selling) — Closing</th><td>{fmt(stock_val_sell)}</td></tr><tr><th>Total Sales Value (This Period)</th><td>{fmt(sales_total)}</td></tr><tr><th>Total Purchases Value (This Period)</th><td>{fmt(purch_total)}</td></tr><tr><th>Gross Profit Value (This Period)</th><td>{fmt(gross_profit)}</td></tr><tr><th>Total Profit / Loss Value (Gross - Losses - Expenses)</th><td><b>{fmt(profit_loss)}</b></td></tr></table><br><div class="grid2"><a href="/subscription"><button class="orange">💳 Subscription</button></a><a href="/shop-settings"><button class="blue">⚙️ WhatsApp Settings</button></a></div>{'<a href="/print-transactions"><button style="margin-top:10px">🖨️ Print Transactions</button></a>' if role in ['owner','manager'] else ''}</div>"""
+    if role=='owner':
+        html+=f"""<div class="card" style="background:#ecfdf5;border:2px solid #16a34a"><b>📦 Opening & Closing Stock Value — MD ONLY — Current Period</b><table><tr><th>Opening Stock Value (Cost) — = Yesterday Closing</th><td>{fmt(opening_cost)}</td></tr><tr><th>Opening Stock Value (Selling) — = Yesterday Closing</th><td>{fmt(opening_sell)}</td></tr><tr><th>Closing Stock Value (Cost) — = Opening + Purchases - Sales</th><td>{fmt(closing_cost)}</td></tr><tr><th>Closing Stock Value (Selling) — = Opening + Purchases - Sales</th><td>{fmt(closing_sell)}</td></tr></table><p class="muted">Difference between current stock and all sales for the period = Closing. Closing go be Opening for Next Period.</p></div>"""
+    html+=f"""<div class='section'>🏆 Performance Report — Period: {period.upper()}</div><div class='card'><div class='grid2'><div><b>🔥 Most Selling (This Period)</b><table><tr><th>Product</th><th>Qty</th><th>Total</th></tr>{''.join([f"<tr><td><b>{x['item']}</b></td><td>{x['qty']}</td><td>{fmt(x['total'])}</td></tr>" for x in most_selling]) or '<tr><td colspan=3>No sales this period</td></tr>'}</table></div><div><b>💰 Most Profitable (This Period)</b><table><tr><th>Product</th><th>Profit</th><th>Qty</th></tr>{''.join([f"<tr><td><b>{x['item']}</b></td><td>{fmt(x['profit'])}</td><td>{x['qty']}</td></tr>" for x in most_profit]) or '<tr><td colspan=3>No sales this period</td></tr>'}</table></div></div></div>"""
+    if role=='owner':
+        total_perf=sum(x["total"] for x in perf_list) or 1; colors=["#0b3d91","#0ea5e9","#16a34a","#f59e0b","#dc2626"]; segs=[]; start=0
+        for i,x in enumerate(most_selling):
+            pct=x["total"]/total_perf*100; segs.append(f"{colors[i%len(colors)]} {start:.1f}% {start+pct:.1f}%"); start+=pct
+        grad=f"conic-gradient({', '.join(segs)})" if segs else "conic-gradient(#e2e8f0 0% 100%)"
+        legend="".join([f"<div><span style='display:inline-block;width:12px;height:12px;background:{colors[i%len(colors)]}'></span> {x['item']} — {fmt(x['total'])} ({x['total']/total_perf*100:.1f}%)</div>" for i,x in enumerate(most_selling)])
+        html+=f"""<div class='section'>📊 Pie Chart — Performance — MD ONLY — This Period</div><div class='card' style='text-align:center'><div class='pie' style='background:{grad}'></div><br>{legend or 'No sales yet this period'}<p class='muted'>Pie shows share of sales by product for selected period.</p></div>"""
+    html+="<div class='section'>📦 Stock / Inventory — Closing Stock For This Period</div><div class='card'><table><tr><th>Item</th><th>Purchased (To Date)</th><th>Sold (To Date)</th><th>Remaining = Closing</th><th>Cost</th><th>Selling</th><th>Expiry</th><th>Status</th></tr>"
     for r in combined: html+=f"<tr><td><b>{r['item']}</b></td><td>{r['purch_qty']}</td><td>{r['sales_qty']}</td><td><b>{r['remaining']}</b></td><td>{fmt(r['cost_price'])}</td><td>{fmt(r['selling_price'])}</td><td>{r['expiry_date'] or '-'}</td><td>{r['status']}</td></tr>"
     html+="</table></div>"
     if role=='admin':
         opts="".join([f"<option value='{r['item']}'>{r['item']} - Available {r['remaining']}</option>" for r in combined if r['remaining']>0])
         html+=f"""<div class="section">🛒 Add Sale - Admin Only</div><div class="card"><form method="post" action="/sell"><label>Item</label><select name="item">{opts}</select><div class="grid2"><div><label>Qty</label><input name="qty" type="number" step="any" required></div><div><label>Selling Price (₦)</label><input name="price" type="number" step="any" required></div></div><label>Or new item</label><input name="item_new"><button class="green">ADD SALE</button></form></div>"""
     if role in ['manager','admin']:
-        html+="""<div class="section">➕ Add Purchase - Manager/Admin Only</div><div class="card"><form method="post" action="/add_purchase"><label>Item Name</label><input name="item" required><div class="grid3"><div><label>Qty</label><input name="qty" type="number" step="any" required></div><div><label>Cost Price</label><input name="cost_price" type="number" step="any" required></div><div><label>Selling Price</label><input name="selling_price" type="number" step="any" required></div></div><div class="grid3"><div><label>Expiry Date</label><input name="expiry_date" type="date"></div><div><label>Min Stock</label><input name="min_stock" type="number" step="any" value="0"></div><div><label>Max Stock</label><input name="max_stock" type="number" step="any" value="0"></div></div><button class="orange">ADD PURCHASE - Will Notify MD & Manager</button></form></div>"""
+        html+="""<div class="section">➕ Add Purchase - Manager/Admin Only</div><div class="card"><form method="post" action="/add_purchase"><label>Item Name</label><input name="item" required><div class="grid3"><div><label>Qty</label><input name="qty" type="number" step="any" required></div><div><label>Cost Price</label><input name="cost_price" type="number" step="any" required></div><div><label>Selling Price</label><input name="selling_price" type="number" step="any" required></div></div><div class="grid3"><div><label>Expiry Date</label><input name="expiry_date" type="date"></div><div><label>Min Stock</label><input name="min_stock" type="number" step="any" value="0"></div><div><label>Max Stock</label><input name="max_stock" type="number" step="any" value="0"></div></div><button class="orange">ADD PURCHASE</button></form></div>"""
     if role in ['manager','admin','owner']:
-        html+="<div class='section'>👥 Debtors — MD View Only, Manager NO Settle, Admin Can Settle</div><div class='card'>"
-        if role=='admin': html+="""<form method="post" action="/add_debtor_admin"><label>Customer Name</label><input name="name" required><label>Amount (₦)</label><input name="amount" type="number" step="any" required><label>Phone</label><input name="phone"><label>Item / Reason</label><input name="item"><button>Add Debtor (Admin)</button></form><hr>"""
+        html+=f"<div class='section'>👥 Debtors — Current Period Only — MD View Only, Manager NO Settle</div><div class='card'>"
+        if role=='admin': html+=f"""<form method="post" action="/add_debtor_admin"><label>Customer Name</label><input name="name" required><label>Amount (₦)</label><input name="amount" type="number" step="any" required><label>Phone</label><input name="phone"><label>Item</label><input name="item"><label>Reason</label><select name="reason">{dr_opts}</select><label>Timeline</label><select name="timeframe">{tl_opts}</select><button>Add Debtor (Admin)</button></form><hr>"""
         for r in debtors:
-            btn=f"<a href='/settle_debtor/{r['id']}'><button class='small green'>Settle + Notify</button></a>" if role=='admin' else "<span class='muted'>View Only — No Settle</span>"
-            html+=f"<div class='row-card'><div><b>{r['name']}</b> - {fmt(r['amount'])} - {r['status']} - {r['item']}</div>{btn}</div>"
+            bal=float(safe(r,'amount') or 0)-float(safe(r,'paid_amount') or 0)
+            btn=f"<a href='/settle_debtor_form/{r['id']}'><button class='small green'>Settle Full / Partial</button></a>" if role=='admin' else "<span class='muted'>View Only</span>"
+            html+=f"<div class='row-card'><div><b>{r['name']}</b> - Total {fmt(r['amount'])} | Paid {fmt(safe(r,'paid_amount'))} | Bal {fmt(bal)} - {r['status']} - Reason: {r['reason']} - Timeline: {r['timeframe']}</div>{btn}</div>"
         html+="</div>"
     if role in ['manager','admin','owner']:
-        html+="<div class='section'>🏦 Creditors — MD View Only, Manager + Admin Can Settle</div><div class='card'>"
-        if role in ['manager','admin']: html+="""<form method="post" action="/add_creditor"><label>Creditor Name</label><input name="name" required><label>Amount (₦)</label><input name="amount" type="number" step="any" required><label>Phone</label><input name="phone"><label>Item / Reason</label><input name="item"><button>Add Creditor</button></form><hr>"""
+        html+=f"<div class='section'>🏦 Creditors — Current Period Only — MD View Only, Manager + Admin Can Settle Full / Partial</div><div class='card'>"
+        if role in ['manager','admin']: html+=f"""<form method="post" action="/add_creditor"><label>Creditor Name</label><input name="name" required><label>Amount (₦)</label><input name="amount" type="number" step="any" required><label>Phone</label><input name="phone"><label>Item / Reason</label><input name="item"><label>Settlement Timeline</label><select name="timeframe">{tl_opts}</select><button>Add Creditor</button></form><hr>"""
         for r in creditors:
-            btn=f"<a href='/settle_creditor/{r['id']}'><button class='small'>Settle + Notify</button></a>" if role in ['manager','admin'] else "<span class='muted'>View Only — No Settle</span>"
-            html+=f"<div class='row-card'><div><b>{r['name']}</b> - {fmt(r['amount'])} - {r['status']} - {r['item']}</div>{btn}</div>"
+            bal=float(safe(r,'amount') or 0)-float(safe(r,'paid_amount') or 0)
+            btn=f"<a href='/settle_creditor_form/{r['id']}'><button class='small'>Settle Full / Partial</button></a>" if role in ['manager','admin'] else "<span class='muted'>View Only</span>"
+            html+=f"<div class='row-card'><div><b>{r['name']}</b> - Total {fmt(r['amount'])} | Paid {fmt(safe(r,'paid_amount'))} | Bal {fmt(bal)} - {r['status']} - Timeline: {r['timeframe']}</div>{btn}</div>"
         html+="</div>"
     if role in ['manager','admin','owner']:
-        html+="<div class='section'>💸 Losses & Expenses</div><div class='card'>"
-        if role in ['manager','admin']: html+="<form method='post' action='/add_loss'><label>Loss Item</label><input name='item' required><label>Amount</label><input name='amount' type='number' step='any' required><label>Reason</label><input name='reason'><button style='background:#dc2626'>Add Loss (Manager/Admin)</button></form><hr>"
+        html+=f"<div class='section'>💸 Losses & Expenses — Current Period Only</div><div class='card'>"
+        if role in ['manager','admin']: html+=f"<form method='post' action='/add_loss'><label>Loss Item</label><input name='item' required><label>Amount</label><input name='amount' type='number' step='any' required><label>Reason For Loss</label><select name='reason'>{lr_opts}</select><button style='background:#dc2626'>Add Loss (Manager/Admin)</button></form><hr>"
         if role=='admin': html+="<form method='post' action='/add_expense'><label>Expense Item (Admin Direct)</label><input name='item' required><label>Amount</label><input name='amount' type='number' step='any' required><label>Note</label><input name='note'><button>Add Expense (Admin Only)</button></form><hr>"
         for r in expenses: html+=f"<div class='row-card'><div><b>Expense: {r['item']}</b> - {r['note']}</div><b>{fmt(r['amount'])}</b></div>"
-        for r in losses: html+=f"<div class='row-card'><div><b>Loss: {r['item']}</b> - {r['reason']}</div><b>{fmt(r['amount'])}</b></div>"
+        for r in losses: html+=f"<div class='row-card'><div><b>Loss: {r['item']}</b> - Reason: {r['reason']}</div><b>{fmt(r['amount'])}</b></div>"
         html+="</div>"
     if role in ['manager','admin','owner']:
-        html+="<div class='section'>📩 Requests To MD/CEO — Expenditure / Budget / Salary / Expenses</div><div class='card'>"
-        # Manager submit form ONLY if no pending? Show form but explain submit becomes inactive after submit
-        if role in ['manager','admin']: html+="<form method='post' action='/add_request'><label>Type</label><select name='type'><option>Expenditure</option><option>Budget Request</option><option>Salary Schedule</option><option>Expense Request</option></select><label>Title</label><input name='title' required><label>Items / Details</label><textarea name='items'></textarea><label>Amount (₦)</label><input name='amount' type='number' step='any'><label>Notes / Reason For Approval</label><textarea name='note' required></textarea><button>Send Request To MD/CEO For Approval</button></form><hr><p class='muted'>After you submit, Submit button go disappear until MD act. If MD reject with remark, Resubmit go become active.</p>"
+        html+=f"<div class='section'>📩 Requests To MD/CEO — Current Period Only</div><div class='card'>"
+        if role in ['manager','admin']: html+="<form method='post' action='/add_request'><label>Type</label><select name='type'><option>Expenditure</option><option>Budget Request</option><option>Salary Schedule</option><option>Expense Request</option></select><label>Title</label><input name='title' required><label>Items / Details</label><textarea name='items'></textarea><label>Amount (₦)</label><input name='amount' type='number' step='any'><label>Notes</label><textarea name='note' required></textarea><button>Send Request To MD/CEO</button></form><hr>"
         for r in requests_list:
             md_form=""
-            if role=='owner' and r['status']=='Pending': md_form=f"""<form method="post" action="/md_remark/{r['id']}" style="margin-top:8px"><label>MD Remark — Approve</label><textarea name="remark" placeholder="Write remark..." required></textarea><button class="small green">Save Remark & Approve</button></form><form method="post" action="/md_reject/{r['id']}" style="margin-top:6px"><label>MD Remark — Reject With Action Needed</label><textarea name="remark" placeholder="Why reject? What should Manager do?" required></textarea><button class="small red">Reject With Remark</button></form>"""
+            if role=='owner' and r['status']=='Pending': md_form=f"""<form method="post" action="/md_remark/{r['id']}" style="margin-top:8px"><label>MD Remark — Approve</label><textarea name="remark" required></textarea><button class="small green">Save Remark & Approve</button></form><form method="post" action="/md_reject/{r['id']}" style="margin-top:6px"><label>MD Remark — Reject</label><textarea name="remark" required></textarea><button class="small red">Reject With Remark</button></form>"""
             resubmit=""
-            if role in ['manager','admin'] and r['status']=='Rejected': resubmit=f"""<form method="post" action="/resubmit_request/{r['id']}" style="margin-top:8px"><label>Act On MD Remark & Resubmit</label><textarea name="note" placeholder="What you don fix based on MD remark?" required></textarea><button class="small orange">🔁 Resubmit After MD Rejection</button></form>"""
-            status_note=""
-            if r['status']=='Pending' and role in ['manager','admin']: status_note="<br><span class='muted'>⏳ Submit inactive — waiting for MD. No resubmit until MD reject.</span>"
-            if r['status']=='Approved': status_note="<br><span class='muted'>✅ Approved by MD — Submit closed. MD remark don submit.</span>"
-            html+=f"<div class='row-card'><div><b>{r['type']}: {r['title']}</b> - {r['status']}<br><span class='muted'>{r['items']} | {fmt(r['amount'])}</span><br><b>Note:</b> {r['note']}<br>{('<b>MD Remark:</b> '+r['owner_feedback']) if r['owner_feedback'] else ''}{status_note}{md_form}{resubmit}</div></div>"
+            if role in ['manager','admin'] and r['status']=='Rejected': resubmit=f"""<form method="post" action="/resubmit_request/{r['id']}" style="margin-top:8px"><label>Act On MD Remark & Resubmit</label><textarea name="note" required></textarea><button class="small orange">🔁 Resubmit</button></form>"""
+            html+=f"<div class='row-card'><div><b>{r['type']}: {r['title']}</b> - {r['status']}<br><span class='muted'>{r['items']} | {fmt(r['amount'])}</span><br><b>Note:</b> {r['note']}<br>{('<b>MD Remark:</b> '+r['owner_feedback']) if r['owner_feedback'] else ''}{md_form}{resubmit}</div></div>"
         html+="</div>"
-        # ALERTS TABLE V8 - FIXED
-        html+="<div class='section'>🚨 Alert Requests — TABLE (Fixed)</div><div class='card'>"
+        html+="<div class='section'>🚨 Alerts — Expiry + Stock Levels + Expedited (Fixed)</div><div class='card'>"
+        if auto_alerts: html+="<div style='background:#fef3c7;padding:12px;border-radius:10px;margin-bottom:10px'><b>🔔 Auto Alerts:</b><br>"+"<br>".join(auto_alerts)+"</div>"
         if role in ['manager','admin']: html+="<form method='post' action='/add_alert'><label>Alert Item</label><input name='alert_item' required><label>Alert Type</label><select name='alert_type'><option>Low Stock</option><option>Expiry</option><option>Urgent</option><option>Other</option></select><label>Manager Recommendation + Notes</label><textarea name='manager_message' required></textarea><label><input type='checkbox' name='expedited' value='yes' style='width:auto'> ⚡ EXPEDITED / URGENT</label><br><br><button class='orange'>Send Alert To MD/CEO</button></form><hr>"
-        html+="<table><tr><th>Item</th><th>Type</th><th>Recommendation / Notes</th><th>Status</th><th>MD Remark</th><th>Action</th></tr>"
+        html+="<table><tr><th>Item</th><th>Type</th><th>Recommendation</th><th>Status</th><th>MD Remark</th><th>Action</th></tr>"
         for r in alerts:
             act=""
             if role=='owner' and r['status']=='Pending': act=f"""<form method="post" action="/md_alert_remark/{r['id']}"><input name="remark" placeholder="MD Remark" required><button class="small">Save Remark</button></form>"""
-            elif role=='owner': act="<span class='muted'>Reviewed</span>"
             else: act=f"<span class='muted'>{r['status']}</span>"
             html+=f"<tr><td><b>{r['alert_item']}</b></td><td>{r['alert_type']}</td><td>{r['manager_message']}</td><td>{r['status']}</td><td>{r['owner_remark'] or '-'}</td><td>{act}</td></tr>"
         html+="</table></div>"
     if role in ['manager','admin','owner']:
-        html+="<div class='section'>📋 Submitted Histories To MD/CEO</div><div class='card'>"
-        if role in ['manager','admin']: html+="<form method='post' action='/submit_history'><label>Period Label</label><input name='period_label' required><label>Summary</label><textarea name='summary'></textarea><label>Manager Remark</label><textarea name='manager_remark' required></textarea><button class='blue'>Submit To MD/CEO</button></form><hr>"
-        for s in submissions: html+=f"<div class='row-card'><div><b>{s['period_label']} - {s['status']}</b><br><span class='muted'>{s['summary']} • {s['date']}</span><br><b>Remark:</b> {s['manager_remark']}<br>{('<b>MD Remark:</b> '+s['owner_remark']) if s['owner_remark'] else ''}</div></div>"
+        html+="<div class='section'>📋 Submitted History For Review — Daily / Weekly / Monthly / Quarterly / Yearly — Internal Control</div><div class='card'>"
+        if role in ['manager','admin']: html+="<form method='post' action='/submit_history'><label>Period</label><select name='period'><option>Daily</option><option>Weekly</option><option>Monthly</option><option>Quarterly</option><option>Yearly</option></select><label>Period Label (e.g. Week 1 - Nov 2026)</label><input name='period_label' required><label>Summary — Include Opening, Sales, Closing</label><textarea name='summary'></textarea><label>Manager Remark / Comment</label><textarea name='manager_remark' required></textarea><button class='blue'>Submit To MD/CEO For Review</button></form><hr><p class='muted'>Manager: review period record, add remark, submit. MD go check, review, validate.</p>"
+        for s in submissions:
+            md_form=""
+            if role=='owner' and s['status']=='Submitted': md_form=f"""<form method="post" action="/md_submission_remark/{s['id']}" style="margin-top:8px"><label>MD Remark — Approve / Validate</label><textarea name="remark" required></textarea><button class="small green">Save MD Remark & Approve</button></form>"""
+            html+=f"<div class='row-card'><div><b>{s['period']} — {s['period_label']} - {s['status']}</b><br><span class='muted'>{s['summary']} • {s['date']}</span><br><b>Manager Remark:</b> {s['manager_remark']}<br>{('<b>MD Remark:</b> '+s['owner_remark']) if s['owner_remark'] else ''}{md_form}</div></div>"
         html+="</div>"
     return html+logout_bar()+end()
 @app.route("/add_user", methods=["POST"])
@@ -346,7 +412,12 @@ def sell():
     remain=stock_remaining(session.get('shop_id'), item)
     if remain<=0: return STYLE+top("Out of Stock","")+f"<div class='card'><h3>⛔ OUT OF STOCK</h3><p>{item} don finish.</p><a href='/shop'>Go Back</a></div>"+end()
     if qty>remain: return STYLE+top("Not Enough Stock","")+f"<div class='card'><h3>⛔ NOT ENOUGH</h3><p>Only {remain} remain.</p><a href='/shop'>Go Back</a></div>"+end()
-    conn=get_db(); total=qty*price; conn.execute("INSERT INTO sales (shop_id, item, qty, price, selling_price, total, created_by, created_by_role, date) VALUES (?,?,?,?,?,?,?,?,?)",(session.get('shop_id'),item,qty,price,price,total,session.get('username'),session.get('role'),today_str())); conn.commit()
+    conn=get_db(); total=qty*price; cp=0
+    try:
+        pr=conn.execute("SELECT cost_price FROM purchases WHERE shop_id=? AND item=? ORDER BY id DESC LIMIT 1",(session.get('shop_id'),item)).fetchone()
+        if pr: cp=float(safe(pr,'cost_price') or 0)
+    except: pass
+    conn.execute("INSERT INTO sales (shop_id, item, qty, price, cost_price, selling_price, total, created_by, created_by_role, date) VALUES (?,?,?,?,?,?,?,?,?,?)",(session.get('shop_id'),item,qty,price,cp,price,total,session.get('username'),session.get('role'),today_str())); conn.commit()
     last=conn.execute("SELECT id FROM sales WHERE shop_id=? ORDER BY id DESC LIMIT 1",(session.get('shop_id'),)).fetchone(); nid=last["id"] if last else 0
     return STYLE+top("Sale Added","")+f"<div class='card'><h3>✅ Sale Added: {item} x{qty} = {fmt(total)}</h3><a href='/sale-whatsapp/{nid}'><button class='green'>📲 Notify MD & Manager (Sale)</button></a><br><br><a href='/shop'>Go Back</a></div>"+end()
 @app.route("/add_purchase", methods=["POST"])
@@ -359,31 +430,49 @@ def add_purchase():
 @app.route("/add_debtor", methods=["POST"])
 def add_debtor():
     if session.get('role')!='sales': return blocked_msg("Only Salesperson fit add debtor.")
-    conn=get_db(); conn.execute("INSERT INTO debtors (shop_id, name, amount, phone, item, reason, status, created_by, created_by_role, date) VALUES (?,?,?,?,?,?,?,?,?,?)",(session.get('shop_id'),request.form.get("name"),float(request.form.get("amount") or 0),request.form.get("phone",""),request.form.get("item",""),request.form.get("item",""),"Owing",session.get('username'),session.get('role'),today_str())); conn.commit()
+    conn=get_db(); conn.execute("INSERT INTO debtors (shop_id, name, amount, phone, item, reason, status, timeframe, paid_amount, created_by, created_by_role, date) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",(session.get('shop_id'),request.form.get("name"),float(request.form.get("amount") or 0),request.form.get("phone",""),request.form.get("item",""),request.form.get("reason",""),"Owing",request.form.get("timeframe",""),0,session.get('username'),session.get('role'),today_str())); conn.commit()
     last=conn.execute("SELECT id FROM debtors WHERE shop_id=? ORDER BY id DESC LIMIT 1",(session.get('shop_id'),)).fetchone(); nid=last["id"] if last else 0
     return STYLE+top("Debtor Added","")+f"<div class='card'><h3>✅ Debtor Added</h3><a href='/debtor-whatsapp/{nid}'><button class='green'>📲 Notify MD & Manager (Debtor)</button></a><br><br><a href='/shop'>Go Back</a></div>"+end()
 @app.route("/add_debtor_admin", methods=["POST"])
 def add_debtor_admin():
     if session.get('role')!='admin': return blocked_msg("Only Admin.")
-    conn=get_db(); conn.execute("INSERT INTO debtors (shop_id, name, amount, phone, item, reason, status, created_by, created_by_role, date) VALUES (?,?,?,?,?,?,?,?,?,?)",(session.get('shop_id'),request.form.get("name"),float(request.form.get("amount") or 0),request.form.get("phone",""),request.form.get("item",""),request.form.get("item",""),"Owing",session.get('username'),session.get('role'),today_str())); conn.commit(); return redirect("/shop")
+    conn=get_db(); conn.execute("INSERT INTO debtors (shop_id, name, amount, phone, item, reason, status, timeframe, paid_amount, created_by, created_by_role, date) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",(session.get('shop_id'),request.form.get("name"),float(request.form.get("amount") or 0),request.form.get("phone",""),request.form.get("item",""),request.form.get("reason",""),"Owing",request.form.get("timeframe",""),0,session.get('username'),session.get('role'),today_str())); conn.commit(); return redirect("/shop")
+@app.route("/settle_debtor_form/<int:did>", methods=["GET","POST"])
+def settle_debtor_form(did):
+    if session.get('role') not in ['sales','admin']: return blocked_msg("MD & Manager cannot settle Debtors. Only Sales & Admin.")
+    conn=get_db(); r=conn.execute("SELECT * FROM debtors WHERE id=? AND shop_id=?",(did,session.get('shop_id'))).fetchone()
+    if not r: return "Debtor not found"
+    bal=float(safe(r,'amount') or 0)-float(safe(r,'paid_amount') or 0)
+    if request.method=="POST":
+        amt=float(request.form.get("amount") or 0)
+        if amt<=0 or amt>bal: return f"Amount must be 1 to {bal}. <a href='/shop'>Go Back</a>"
+        new_paid=float(safe(r,'paid_amount') or 0)+amt; status='Paid' if new_paid>=float(safe(r,'amount') or 0)-0.01 else 'Partially Paid'
+        conn.execute("UPDATE debtors SET paid_amount=?, status=? WHERE id=?",(new_paid,status,did)); conn.commit()
+        return STYLE+top("Debtor Settled","")+f"<div class='card'><h3>✅ {'Full' if status=='Paid' else 'Partial'} Settlement: {fmt(amt)} | Balance Now {fmt(float(safe(r,'amount') or 0)-new_paid)}</h3><a href='/debtor-whatsapp/{did}'><button class='green'>📲 Notify MD & Manager</button></a><br><br><a href='/shop'>Go Back</a></div>"+end()
+    return STYLE+top("Settle Debtor — Full / Partial","")+f"""<div class="card"><p><b>{r['name']}</b> — Total {fmt(r['amount'])} | Paid {fmt(safe(r,'paid_amount'))} | Balance {fmt(bal)} | Timeline {r['timeframe']}</p><form method="post"><label>Amount To Pay Now (Full or Partial)</label><input name="amount" type="number" step="any" max="{bal}" required><p class="muted">Enter full balance {fmt(bal)} for Full, or less for Partial.</p><button class="green">Settle Now</button></form></div>"""+end()
 @app.route("/settle_debtor/<int:did>")
-def settle_debtor(did):
-    # V8: MD & Manager CANNOT settle Debtors. Only Sales + Admin
-    if session.get('role') not in ['sales','admin']: return blocked_msg("MD/CEO & Manager cannot settle Debtors. Only Salesperson & Admin.")
-    conn=get_db(); conn.execute("UPDATE debtors SET status='Paid', paid_amount=amount WHERE id=? AND shop_id=?",(did,session.get('shop_id'))); conn.commit()
-    return STYLE+top("Debtor Settled","")+f"<div class='card'><h3>✅ Debtor Settled</h3><a href='/debtor-whatsapp/{did}'><button class='green'>📲 Notify MD & Manager (Debtor Settled)</button></a><br><br><a href='/shop'>Go Back</a></div>"+end()
+def settle_debtor(did): return redirect(f"/settle_debtor_form/{did}")
 @app.route("/add_creditor", methods=["POST"])
 def add_creditor():
     if session.get('role') not in ['manager','admin']: return blocked_msg("Only Manager/Admin fit add creditor.")
-    conn=get_db(); conn.execute("INSERT INTO creditors (shop_id, name, amount, phone, item, reason, status, created_by, created_by_role, date) VALUES (?,?,?,?,?,?,?,?,?,?)",(session.get('shop_id'),request.form.get("name"),float(request.form.get("amount") or 0),request.form.get("phone",""),request.form.get("item",""),request.form.get("item",""),"Owing",session.get('username'),session.get('role'),today_str())); conn.commit()
+    conn=get_db(); conn.execute("INSERT INTO creditors (shop_id, name, amount, phone, item, reason, status, timeframe, paid_amount, created_by, created_by_role, date) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",(session.get('shop_id'),request.form.get("name"),float(request.form.get("amount") or 0),request.form.get("phone",""),request.form.get("item",""),request.form.get("item",""),"Owing",request.form.get("timeframe",""),0,session.get('username'),session.get('role'),today_str())); conn.commit()
     last=conn.execute("SELECT id FROM creditors WHERE shop_id=? ORDER BY id DESC LIMIT 1",(session.get('shop_id'),)).fetchone(); nid=last["id"] if last else 0
     return STYLE+top("Creditor Added","")+f"<div class='card'><h3>✅ Creditor Added</h3><a href='/creditor-whatsapp/{nid}'><button class='green'>📲 Notify MD & Manager (Creditor)</button></a><br><br><a href='/shop'>Go Back</a></div>"+end()
+@app.route("/settle_creditor_form/<int:cid>", methods=["GET","POST"])
+def settle_creditor_form(cid):
+    if session.get('role') not in ['manager','admin']: return blocked_msg("MD cannot settle Creditors. Only Manager & Admin.")
+    conn=get_db(); r=conn.execute("SELECT * FROM creditors WHERE id=? AND shop_id=?",(cid,session.get('shop_id'))).fetchone()
+    if not r: return "Creditor not found"
+    bal=float(safe(r,'amount') or 0)-float(safe(r,'paid_amount') or 0)
+    if request.method=="POST":
+        amt=float(request.form.get("amount") or 0)
+        if amt<=0 or amt>bal: return f"Amount must be 1 to {bal}. <a href='/shop'>Go Back</a>"
+        new_paid=float(safe(r,'paid_amount') or 0)+amt; status='Paid' if new_paid>=float(safe(r,'amount') or 0)-0.01 else 'Partially Paid'
+        conn.execute("UPDATE creditors SET paid_amount=?, status=? WHERE id=?",(new_paid,status,cid)); conn.commit()
+        return STYLE+top("Creditor Settled","")+f"<div class='card'><h3>✅ {'Full' if status=='Paid' else 'Partial'} Settlement: {fmt(amt)} | Balance Now {fmt(float(safe(r,'amount') or 0)-new_paid)}</h3><a href='/creditor-whatsapp/{cid}'><button class='green'>📲 Notify MD & Manager</button></a><br><br><a href='/shop'>Go Back</a></div>"+end()
+    return STYLE+top("Settle Creditor — Full / Partial","")+f"""<div class="card"><p><b>{r['name']}</b> — Total {fmt(r['amount'])} | Paid {fmt(safe(r,'paid_amount'))} | Balance {fmt(bal)} | Timeline {r['timeframe']}</p><form method="post"><label>Amount To Pay Now (Full or Partial)</label><input name="amount" type="number" step="any" max="{bal}" required><p class="muted">Enter full balance {fmt(bal)} for Full, or less for Partial.</p><button class="green">Settle Now</button></form></div>"""+end()
 @app.route("/settle_creditor/<int:cid>")
-def settle_creditor(cid):
-    # V8: MD CANNOT settle Creditors. Only Manager + Admin
-    if session.get('role') not in ['manager','admin']: return blocked_msg("MD/CEO cannot settle Creditors. Only Manager & Admin.")
-    conn=get_db(); conn.execute("UPDATE creditors SET status='Paid', paid_amount=amount WHERE id=? AND shop_id=?",(cid,session.get('shop_id'))); conn.commit()
-    return STYLE+top("Creditor Settled","")+f"<div class='card'><h3>✅ Creditor Settled</h3><a href='/creditor-whatsapp/{cid}'><button class='green'>📲 Notify MD & Manager (Creditor Settled)</button></a><br><br><a href='/shop'>Go Back</a></div>"+end()
+def settle_creditor(cid): return redirect(f"/settle_creditor_form/{cid}")
 @app.route("/add_expense", methods=["POST"])
 def add_expense():
     if session.get('role')!='admin': return blocked_msg("Manager must send Expense Request to MD. Only Admin direct.")
@@ -408,12 +497,8 @@ def md_reject(rid):
 def resubmit_request(rid):
     if session.get('role') not in ['manager','admin']: return blocked_msg("Only Manager/Admin fit resubmit.")
     conn=get_db(); r=conn.execute("SELECT * FROM requests WHERE id=? AND shop_id=?",(rid,session.get('shop_id'))).fetchone()
-    if not r or r['status']!='Rejected': return blocked_msg("You can only resubmit after MD rejects with remark.")
+    if not r or r['status']!='Rejected': return blocked_msg("You can only resubmit after MD rejects.")
     conn.execute("UPDATE requests SET note=?, status='Pending' WHERE id=? AND shop_id=?",(request.form.get("note",""),rid,session.get('shop_id'))); conn.commit(); return redirect("/shop")
-@app.route("/approve_request/<int:rid>")
-def approve_request(rid):
-    if session.get('role')!='owner': return blocked_msg("Only MD/CEO fit approve.")
-    conn=get_db(); conn.execute("UPDATE requests SET status='Approved' WHERE id=? AND shop_id=?",(rid,session.get('shop_id'))); conn.commit(); return redirect("/shop")
 @app.route("/add_alert", methods=["POST"])
 def add_alert():
     if session.get('role') not in ['manager','admin']: return blocked_msg("Only Manager/Admin fit send alert.")
@@ -427,7 +512,11 @@ def md_alert_remark(aid):
 @app.route("/submit_history", methods=["POST"])
 def submit_history():
     if session.get('role') not in ['manager','admin']: return blocked_msg()
-    conn=get_db(); conn.execute("INSERT INTO submissions (shop_id, period, period_label, summary, status, manager_remark, created_by, date) VALUES (?,?,?,?,?,?,?,?)",(session.get('shop_id'),request.form.get("period_label"),request.form.get("period_label"),request.form.get("summary",""),"Submitted",request.form.get("manager_remark",""),session.get('username'),today_str())); conn.commit(); return redirect("/shop")
+    conn=get_db(); conn.execute("INSERT INTO submissions (shop_id, period, period_label, summary, status, manager_remark, created_by, date) VALUES (?,?,?,?,?,?,?,?)",(session.get('shop_id'),request.form.get("period"),request.form.get("period_label"),request.form.get("summary",""),"Submitted",request.form.get("manager_remark",""),session.get('username'),today_str())); conn.commit(); return redirect("/shop")
+@app.route("/md_submission_remark/<int:sid2>", methods=["POST"])
+def md_submission_remark(sid2):
+    if session.get('role')!='owner': return blocked_msg("Only MD fit remark on submission.")
+    conn=get_db(); conn.execute("UPDATE submissions SET owner_remark=?, status='Approved' WHERE id=? AND shop_id=?",(request.form.get("remark",""),sid2,session.get('shop_id'))); conn.commit(); return redirect("/shop")
 @app.route("/subscription")
 def subscription():
     if session.get('role')=='sales': return blocked_msg("Salesperson cannot view subscription.")
