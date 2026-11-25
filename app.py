@@ -137,20 +137,29 @@ def login():
         if not shop:
             return STYLE+top("Login","Select Shop")+'<p style="color:red">Please select Shop / Company first.</p><a href="/">Try again</a>'+end()
         # Normal staff login
-        users=USERS.get(shop,{})
-        if u not in users or users[u].get("password")!=p:
-            return STYLE+top("Login","Wrong username or password")+'<p style="color:red">Wrong login. <a href="/">Try again</a></p>'+end()
-        # POINT 15: Staff must enter ONLY their own shop
-        # Already enforced because we only check USERS[shop]
-        session.clear()
-        session["user"]=u
-        session["role"]=users[u].get("role","staff")
-        session["shop"]=shop
-        session["name"]=users[u].get("name",u)
-        # POINT 12: MD/CEO dashboard routing
-        if session["role"]=="md":
-            return redirect("/md")
-        return redirect("/dashboard")
+            conn=get_db()
+    r=conn.execute("SELECT * FROM users WHERE username=? AND shop=?",(u,shop)).fetchone()
+    if not r:
+        return STYLE+top("Login","Wrong username or password")+end()
+    stored=r["password"] if "password" in r.keys() else r["password_hash"]
+    ok=False
+    try:
+        from werkzeug.security import check_password_hash
+        ok=check_password_hash(stored,p)
+    except Exception:
+        ok=(stored==p)
+    if not ok:
+        return STYLE+top("Login","Wrong username or password")+end()
+    session.clear()
+    session["shop"]=shop
+    session["username"]=u
+    session["role"]=r["role"]
+    session["name"]=r["name"] if "name" in r.keys() else u
+    srow=conn.execute("SELECT * FROM shops WHERE code=?",(shop,)).fetchone()
+    session["shop_name"]=srow["name"] if srow and "name" in srow.keys() else shop
+    session["is_super"]=False
+    return redirect("/dashboard")
+            
     # GET - show login form
     return (
         STYLE+top("Login","Welcome back")
