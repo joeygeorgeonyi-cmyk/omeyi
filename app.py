@@ -152,7 +152,7 @@ def login():
             return redirect("/md")
         return redirect("/dashboard")
     # GET - show login form
-        return (
+    return (
         STYLE+top("Login","Welcome back")
         +'<form method="POST">'
         +'<input name="shop" placeholder="SHOP" required>'
