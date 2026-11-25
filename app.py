@@ -152,7 +152,15 @@ def login():
             return redirect("/md")
         return redirect("/dashboard")
     # GET - show login form
-   return STYLE+top("Login","Welcome back")+f'<form method="POST"><input name="shop" placeholder="SHOP" required><input name="username" placeholder="USERNAME" required><input name="password" type="password" placeholder="PASSWORD" required><button>LOGIN</button></form>'+end()
+   return (
+STYLE+top("Login","Welcome back")
++'<form method="POST">'
++'<input name="shop" placeholder="SHOP" required>'
++'<input name="username" placeholder="USERNAME" required>'
++'<input name="password" type="password" placeholder="PASSWORD" required>'
++'<button>LOGIN</button></form>'
++end()
+)
 def logout(): session.clear(); return redirect("/")
 @app.route("/change-password", methods=["GET","POST"])
 def change_password():
