@@ -152,9 +152,7 @@ def login():
             return redirect("/md")
         return redirect("/dashboard")
     # GET - show login form
-    opts="".join([f'<option value="{s}">{s}</option>' for s in sorted(USERS.keys())])
-    return STYLE+top("Login","Welcome back")+f'<form method="POST"><label>SHOP / COMPANY</label><select name="shop" required><option value="">-- Select Shop / Company --</option>{opts}</select><label>USERNAME</label><input name="username" required><label>PASSWORD</label><input name="password" type="password" required><button>LOGIN</button></form>'+end()
-@app.route("/logout")
+   return STYLE+top("Login","Welcome back")+f'<form...
 def logout(): session.clear(); return redirect("/")
 @app.route("/change-password", methods=["GET","POST"])
 def change_password():
