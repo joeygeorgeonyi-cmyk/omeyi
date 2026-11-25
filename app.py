@@ -135,11 +135,11 @@ def login():
             return redirect("/super-admin")
         # POINT 2: Must select shop first (for all other users)
         if not shop:
-            return STYLE+top("Login","Select Shop")+card('<p style="color:red">Please select Shop / Company first.</p><a href="/">Try again</a>')+end()
+            return STYLE+top("Login","Select Shop")+'<p style="color:red">Please select Shop / Company first.</p><a href="/">Try again</a>'+end()
         # Normal staff login
         users=USERS.get(shop,{})
         if u not in users or users[u].get("password")!=p:
-            return STYLE+top("Login","Wrong username or password")+card('<p style="color:red">Wrong login. <a href="/">Try again</a></p>')+end()
+            return STYLE+top("Login","Wrong username or password")+'<p style="color:red">Wrong login. <a href="/">Try again</a></p>'+end()
         # POINT 15: Staff must enter ONLY their own shop
         # Already enforced because we only check USERS[shop]
         session.clear()
@@ -153,7 +153,7 @@ def login():
         return redirect("/dashboard")
     # GET - show login form
     opts="".join([f'<option value="{s}">{s}</option>' for s in sorted(USERS.keys())])
-    return STYLE+top("Login","Welcome back")+card(f'<form method="POST"><label>SHOP / COMPANY</label><select name="shop" required><option value="">-- Select Shop / Company --</option>{opts}</select><label>USERNAME</label><input name="username" required><label>PASSWORD</label><input name="password" type="password" required><button>LOGIN</button></form>')+end()
+    return STYLE+top("Login","Welcome back")+f'<form method="POST"><label>SHOP / COMPANY</label><select name="shop" required><option value="">-- Select Shop / Company --</option>{opts}</select><label>USERNAME</label><input name="username" required><label>PASSWORD</label><input name="password" type="password" required><button>LOGIN</button></form>'+end()
 @app.route("/logout")
 def logout(): session.clear(); return redirect("/")
 @app.route("/change-password", methods=["GET","POST"])
