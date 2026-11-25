@@ -49,8 +49,6 @@ def init_db():
     c.execute("CREATE TABLE IF NOT EXISTS submissions (id INTEGER PRIMARY KEY, shop_id INTEGER, period TEXT, period_label TEXT, summary TEXT DEFAULT '', status TEXT DEFAULT 'Submitted', manager_remark TEXT DEFAULT '', owner_remark TEXT DEFAULT '', created_by TEXT DEFAULT '', date TEXT DEFAULT '')")
     c.execute("CREATE TABLE IF NOT EXISTS alert_requests (id INTEGER PRIMARY KEY, shop_id INTEGER, alert_item TEXT DEFAULT '', alert_type TEXT DEFAULT '', manager_message TEXT DEFAULT '', status TEXT DEFAULT 'Pending', owner_remark TEXT DEFAULT '', created_by TEXT DEFAULT '', date TEXT DEFAULT '')")
     c.execute("CREATE TABLE IF NOT EXISTS shop_settings (shop_id INTEGER PRIMARY KEY, md_phone TEXT DEFAULT '', manager_phone TEXT DEFAULT '')")
-    # NO DEFAULT SHOP. Omeyi is platform, not shop. Super Admin creates all shops.
-    # Delete any old Omeyi shop if e still dey for DB
     try: c.execute("DELETE FROM shops WHERE UPPER(name)='OMEYI'")
     except: pass
     c.commit(); c.close()
@@ -114,7 +112,8 @@ def login():
         if not ok: return STYLE+top("Login","Wrong username or password")+end()
         session.clear(); session["user"]=u; session["username"]=u; session["role"]=d.get("role"); session["name"]=d.get("name") or u; session["shop"]=shop_name; session["shop_id"]=shop_id; session["shop_name"]=shop_name; session["is_super"]=False
         return redirect("/shop")
-    return STYLE+top("Login","Welcome back")+f'<form method="POST"><label>Shop / Company - Select from list</label><select name="shop_id" required><option value="">-- Select Shop --</option>{shop_opts}</select><label>Username</label><input name="username" placeholder="USERNAME" required><label>Password</label><input name="password" type="password" placeholder="PASSWORD" required><button>LOGIN</button></form><p class="muted">Super Admin: superadmin / omeyi123<br>Staff: Select YOUR shop from dropdown, then your username + password</p>'+end()
+    # FIXED: NO required on shop dropdown, so Super Admin can login without selecting shop
+    return STYLE+top("Login","Welcome back")+f'<form method="POST"><label>Shop / Company - Select from list (Staff only - Super Admin leave as -- Select Shop --)</label><select name="shop_id"><option value="">-- Select Shop --</option>{shop_opts}</select><label>Username</label><input name="username" placeholder="USERNAME" required><label>Password</label><input name="password" type="password" placeholder="PASSWORD" required><button>LOGIN</button></form><p class="muted">Super Admin: superadmin / omeyi123 - leave Shop as -- Select Shop --<br>Staff: Select YOUR shop from dropdown, then your username + password</p>'+end()
 
 @app.route("/logout")
 def logout(): session.clear(); return redirect("/")
