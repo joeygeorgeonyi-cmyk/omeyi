@@ -45,11 +45,27 @@ def fmt(n):
     except: return "₦0"
 def get_plans():
     conn=get_db()
+    conn.execute("CREATE TABLE IF NOT EXISTS subscription_plans (name TEXT PRIMARY KEY, amount REAL, days INTEGER)")
+    conn.commit()
     try:
-        rows=conn.execute("SELECT name, amount, days FROM subscription_plans ORDER BY days").fetchall()
-        if rows: return [{"name":r["name"],"amount":float(r["amount"]),"days":int(r["days"])} for r in rows]
-    except: pass
+        rows=conn.execute("SELECT name, amount, days FROM subscription_plans").fetchall()
+        if rows:
+            seen = {}
+            for r in rows:
+                # keep only one per name, last one wins
+                seen[r["name"]] = {"name":r["name"],"amount":float(r["amount"]),"days":int(r["days"])}
+            # keep order: Monthly, Quarterly, Yearly
+            order = ["Monthly", "Quarterly", "Yearly"]
+            result = [seen[n] for n in order if n in seen]
+            # add any other name wey no be those 3
+            for n, v in seen.items():
+                if n not in order:
+                    result.append(v)
+            return result
+    except:
+        pass
     return DEFAULT_PLANS
+
 def stock_remaining(sid, item):
     conn=get_db()
     p=conn.execute("SELECT COALESCE(SUM(qty),0) as q FROM purchases WHERE shop_id=? AND item=?",(sid,item)).fetchone()
@@ -196,7 +212,7 @@ def superadmin():
     rows="".join([f"<tr><td>{t['shop']['name']}</td><td>{t['shop']['admin_user']}</td><td>{'🟢 ON' if t['shop']['is_active'] else '🔴 OFF'}</td><td>{t['sales']} sales / {t['purchases']} purch</td><td><b>{t['total']}</b></td><td>< <a href='/edit-shop/{t['shop']['id']}'>Edit</a> | <a href='/toggle-shop/{t['shop']['id']}'>ON/OFF</a> | <a href='/delete-shop/{t['shop']['id']}' onclick=\"return confirm('Delete this shop?')\" style='color:#dc2626;font-weight:800'>Delete</a></td></tr>" for t in traffic_sorted])
     meter="".join([f"<div class='row-card'><div><b>#{i+1} {t['shop']['name']}</b> — {t['total']} activities<br><div class='meter' style='width:220px;margin-top:6px'><div style='width:{int(t['total']/max_t*100) if max_t else 0}%'></div></div></div><b>{t['total']}</b></div>" for i,t in enumerate(traffic_sorted)])
     shop_opts="".join([f"<option value='{s['id']}'>{s['name']} (ID {s['id']})</option>" for s in shops])
-    return STYLE+top("Super Admin","Create MD & Staff, Edit, Delete, ON/OFF, Traffic")+f"""<div class="card"><b>Create Shop + MD/CEO</b><form method="post" action="/create-shop"><label>Shop Name</label><input name="name" required><label>MD/CEO Username</label><input name="admin_user" required><label>MD/CEO Password</label><input name="admin_pass" required><button>Create Shop</button></form></div><div class="card"><b>Create MD / Staff — ONLY Super Admin Creates</b><form method="post" action="/superadmin-create-user"><label>Select Shop</label><select name="shop_id">{shop_opts}</select><label>Full Name</label><input name="name" required><label>Username</label><input name="username" required><label>Password</label><input name="password" required><label>Role</label><select name="role"><option value="owner">MD/CEO</option><option value="manager">Manager</option><option value="sales">Salesperson</option><option value="admin">Admin</option></select><button class="green">Create MD / Staff</button></form></div><div class="card"><b>📊 Traffic Meter — Rank by Highest</b><br>{meter or 'No traffic yet.'}</div><div class="card"><table><tr><th>Shop</th><th>MD User</th><th>Sub</th><th>Traffic</th><th>Total</th><th>Action</th></tr>{rows}</table></div><div class="card"><a href="/shop-settings"><button class="blue">⚙️ Edit Subscription Prices</button></a></div>"""+logout_bar()+end()
+    return STYLE+top("Super Admin","Create MD & Staff, Edit, Delete, ON/OFF, Traffic")+f"""<div class="card"><b>Create Shop + MD/CEO</b><form method="post" action="/create-shop"><label>Shop Name</label><input name="name" required><label>MD/CEO Username</label><input name="admin_user" required><label>MD/CEO Password</label><input name="admin_pass" required><button>Create Shop</button></form></div><div class="card"><b>Create MD / Staff — ONLY Super Admin Creates</b><form method="post" action="/superadmin-create-user"><label>Select Shop</label><select name="shop_id">{shop_opts}</select><label>Full Name</label><input name="name" required><label>Username</label><input name="username" required><label>Password</label><input name="password" required><label>Role</label><select name="role"><option value="owner">MD/CEO</option><option value="manager">Manager</option><option value="sales">Salesperson</option><option value="admin">Admin</option></select><button class="green">Create MD / Staff</button></form></div><div class="card"><b>📊 Traffic Meter — Rank by Highest</b><br>{meter or 'No traffic yet.'}</div><div class="card"><table><tr><th>Shop</th><th>MD User</th><th>Sub</th><th>Traffic</th><th>Total</th><th>Action</th></tr>{rows}</table></div><div class="card"><a href="/edit-subscription-prices"><button class="blue">⚙️ Edit Subscription Prices</button></a></div>"""+logout_bar()+end()
 @app.route("/create-shop", methods=["POST"])
 def create_shop():
     if session.get('role')!='superadmin': return blocked_msg()
@@ -249,14 +265,16 @@ def shop():
     try: shop_rec=conn.execute("SELECT * FROM shops WHERE id=?",(sid,)).fetchone()
     except: pass
     staff_list=conn.execute("SELECT * FROM users WHERE shop_id=? AND role!='owner' ORDER BY id",(sid,)).fetchall() if sid else []
-    sales_all=conn.execute("SELECT * FROM sales WHERE shop_id=?",(sid,)).fetchall(); purch=conn.execute("SELECT * FROM purchases WHERE shop_id=?",(sid,)).fetchall()
+    sales_all=[dict(r) for r in conn.execute("SELECT * FROM sales WHERE shop_id=?",(sid,)).fetchall()]
+    purch=[dict(r) for r in conn.execute("SELECT * FROM purchases WHERE shop_id=?",(sid,)).fetchall()]
     sales=[s for s in sales_all if str(safe(s,'date') or '')>=pstart] if period!='all' else sales_all
     sales_total=sum(float(safe(r,'total') or 0) for r in sales_all); purch_total=sum(float(safe(r,'total') or 0) for r in purch)
     gross_profit=sum((float(safe(r,'selling_price') or 0)-float(safe(r,'cost_price') or 0))*float(safe(r,'qty') or 0) for r in sales_all)
     total_losses=sum(float(safe(r,'amount') or 0) for r in conn.execute("SELECT * FROM losses WHERE shop_id=?",(sid,)).fetchall())
     total_exp=sum(float(safe(r,'amount') or 0) for r in conn.execute("SELECT * FROM expenses WHERE shop_id=?",(sid,)).fetchall())
     profit_loss=gross_profit-total_losses-total_exp
-    debtors=conn.execute("SELECT * FROM debtors WHERE shop_id=? ORDER BY id DESC LIMIT 50",(sid,)).fetchall(); creditors=conn.execute("SELECT * FROM creditors WHERE shop_id=? ORDER BY id DESC LIMIT 50",(sid,)).fetchall()
+    debtors=[dict(r) for r in conn.execute("SELECT * FROM debtors WHERE shop_id=? ORDER BY id DESC LIMIT 50",(sid,)).fetchall()]
+    creditors=[dict(r) for r in conn.execute("SELECT * FROM creditors WHERE shop_id=? ORDER BY id DESC LIMIT 50",(sid,)).fetchall()]
     expenses=conn.execute("SELECT * FROM expenses WHERE shop_id=? ORDER BY id DESC LIMIT 30",(sid,)).fetchall(); losses=conn.execute("SELECT * FROM losses WHERE shop_id=? ORDER BY id DESC LIMIT 30",(sid,)).fetchall()
     requests_list=conn.execute("SELECT * FROM requests WHERE shop_id=? ORDER BY id DESC LIMIT 30",(sid,)).fetchall(); submissions=conn.execute("SELECT * FROM submissions WHERE shop_id=? ORDER BY id DESC LIMIT 50",(sid,)).fetchall(); alerts=conn.execute("SELECT * FROM alert_requests WHERE shop_id=? ORDER BY id DESC LIMIT 30",(sid,)).fetchall()
     items={}
@@ -412,7 +430,32 @@ def shop():
         html+="</table></div>"
     if role in ['manager','admin','owner']:
         html+="<div class='section'>📋 Submitted History For Review — Daily / Weekly / Monthly / Quarterly / Yearly — Internal Control</div><div class='card'>"
-        if role in ['manager','admin']: html+="<form method='post' action='/submit_history'><label>Period</label><select name='period'><option>Daily</option><option>Weekly</option><option>Monthly</option><option>Quarterly</option><option>Yearly</option></select><label>Period Label (e.g. Week 1 - Nov 2026)</label><input name='period_label' required><label>Summary</label><textarea name='summary'></textarea><label>Manager Remark / Comment</label><textarea name='manager_remark' required></textarea><button class='blue'>Submit To MD/CEO For Review</button></form><hr><p class='muted'>Manager: review period record, add remark, submit. MD go check, review, validate.</p>"
+        if role in ["manager","admin"]:
+            html+=f"""
+    <div style='padding:14px;border-top:2px solid #111'>
+    <h3>📋 Prepare Report To MD/CEO</h3>
+    <p class='muted'>Pick period with calendar. System go auto-fill totals, you fit edit any one before you submit.</p>
+    <form method='post' action='/submit_history'>
+    <label>From Date (Calendar)</label><input type='date' name='from_date' value='{today_str()}' required>
+    <label>To Date (Calendar)</label><input type='date' name='to_date' value='{today_str()}' required>
+    <label>Sales Total (₦)</label><input name='sales_total' type='number' step='any' value='{sales_total}'>
+    <label>Purchases Total (₦)</label><input name='purch_total' type='number' step='any' value='{purch_total}'>
+    <label>Expenditures Total (₦)</label><input name='0' type='number' step='any' value='{0}'>
+    <label>Opening Stock (₦)</label><input name='opening_stock' type='number' step='any' value='0'>
+    <label>Closing Stock (₦)</label><input name='closing_stock' type='number' step='any' value='{0}'>
+    <label>Total Cost Prices (₦)</label><input name='cost_total' type='number' step='any' value='{purch_total}'>
+    <label>Total Selling Prices (₦)</label><input name='selling_total' type='number' step='any' value='{sales_total}'>
+    <label>Debtors - Who Owe Us (₦)</label><input name='debtors_total' type='number' step='any' value='{0}'>
+    <label>Creditors - Who We Owe (₦)</label><input name='creditors_total' type='number' step='any' value='{0}'>
+    <label>Loss Total (₦)</label><input name='losses_total' type='number' step='any' value='{0}'>
+    <label>Profit For Period (₦)</label><input name='profit_total' type='number' step='any' value='{0}'>
+    <label>Itemised Details - Break down the figures above (one per line)</label>
+    <textarea name='details' rows='8' placeholder='e.g. Sales: Rice 50kg - 10 bags - N500,000'>Sales: N{sales_total}\nPurchases: N{purch_total}\nExpenditures: N{0}\nDebtors: N{0}\nCreditors: N{0}</textarea>
+    <label><input type='checkbox' id='reviewCheck' style='width:auto;margin-right:8px' onchange="document.getElementById('submitBtn').disabled=!this.checked"> ✅ I have reviewed this report - I confirm it is correct</label>
+    <button id='submitBtn' class='blue' disabled>Submit This Report To MD/CEO</button>
+    </form></div>
+    """
+
         for s in submissions:
             md_form=""
             if role=='owner' and s['status']=='Submitted': md_form=f"""<form method="post" action="/md_submission_remark/{s['id']}" style="margin-top:8px"><label>MD Remark — Approve / Validate</label><textarea name="remark" required></textarea><button class="small green">Save MD Remark & Approve</button></form>"""
@@ -529,10 +572,30 @@ def add_alert():
 def md_alert_remark(aid):
     if session.get('role')!='owner': return blocked_msg("Only MD/CEO fit remark on alert.")
     conn=get_db(); conn.execute("UPDATE alert_requests SET owner_remark=?, status='Reviewed' WHERE id=? AND shop_id=?",(request.form.get("remark",""),aid,session.get('shop_id'))); conn.commit(); return redirect("/shop")
+
 @app.route("/submit_history", methods=["POST"])
 def submit_history():
-    if session.get('role') not in ['manager','admin']: return blocked_msg()
-    conn=get_db(); conn.execute("INSERT INTO submissions (shop_id, period, period_label, summary, status, manager_remark, created_by, date) VALUES (?,?,?,?,?,?,?,?)",(session.get('shop_id'),request.form.get("period"),request.form.get("period_label"),request.form.get("summary",""),"Submitted",request.form.get("manager_remark",""),session.get('username'),today_str())); conn.commit(); return redirect("/shop")
+    if session.get('role') not in ('manager','admin'):
+        return blocked_msg("Only Manager can submit history.")
+    from_date = request.form.get("from_date") or ""
+    to_date = request.form.get("to_date") or ""
+    def g(n):
+        return request.form.get(n) or "0"
+    summary = f"""PERIOD: {from_date} to {to_date}
+Sales: ₦{g('sales_total')} | Purchases: ₦{g('purch_total')} | Expenditures: ₦{g('0')}
+Opening Stock: ₦{g('opening_stock')} | Closing Stock: ₦{g('closing_stock')}
+Cost Prices: ₦{g('cost_total')} | Selling Prices: ₦{g('selling_total')}
+Debtors: ₦{g('debtors_total')} | Creditors: ₦{g('creditors_total')}
+Loss: ₦{g('losses_total')} | Profit: ₦{g('profit_total')}
+
+ITEMISED DETAILS:
+{request.form.get('details') or ''}"""
+    conn = get_db()
+    conn.execute("INSERT INTO submissions (shop_id, period, period_label, summary, status, created_by, date) VALUES (?,?,?,?,?,?,?)", (session['shop_id'], f"{from_date} to {to_date}", f"{from_date} to {to_date}", summary, "Submitted", session.get("username",""), today_str()))
+    conn.commit()
+    conn.close()
+    return redirect("/shop")
+
 @app.route("/md_submission_remark/<int:sid2>", methods=["POST"])
 def md_submission_remark(sid2):
     if session.get('role')!='owner': return blocked_msg("Only MD fit remark on submission.")
@@ -545,22 +608,87 @@ def subscription():
     html+=f"""<div class="card"><b>How to pay:</b><br>1. Transfer to {PAYMENT_BANK} <b>{PAYMENT_ACCOUNT}</b> ({PAYMENT_NAME})<br>2. Click I Don Pay<br>3. Super Admin go confirm am.</div><a href="/shop">Go Back</a>"""+end(); return html
 @app.route("/subscription/pay")
 def sub_pay(): return STYLE+top("Payment Submitted","")+f"""<div class="card"><h3>Payment Submitted</h3><p>Plan: {request.args.get('plan')}<br>Pay to: {PAYMENT_BANK} - {PAYMENT_ACCOUNT} - {PAYMENT_NAME}</p><a href="/shop">Go Back</a></div>"""+end()
+
+@app.route("/edit-subscription-prices", methods=["GET","POST"])
+@app.route("/edit_subscription_prices", methods=["GET","POST"])
+def edit_subscription_prices():
+    plans = get_plans()
+    if request.method == "POST":
+        conn = get_db()
+        conn.execute("CREATE TABLE IF NOT EXISTS subscription_plans (name TEXT PRIMARY KEY, amount REAL, days INTEGER)")
+        for p in plans:
+            key = "price_" + p["name"]
+            if key in request.form:
+                try:
+                    new_amount = float(request.form[key])
+                    days = p.get("days", 30)
+                    conn.execute("DELETE FROM subscription_plans WHERE name=?", (p["name"],))
+                    conn.execute("INSERT INTO subscription_plans (name, amount, days) VALUES (?, ?, ?)", (p["name"], new_amount, days))
+                    conn.commit()
+                    print(f"SAVED: {p['name']} = {new_amount}")
+                except Exception as e:
+                    print("SAVE ERROR:", e)
+
+        try:
+            conn.commit()
+        except:
+            pass
+        return redirect("/superadmin")
+    
+    html = """
+    <style>
+    body{font-family:Arial;background:#f2f4f7;margin:0;padding:20px}
+    .card{max-width:480px;margin:40px auto;background:white;padding:25px;border-radius:12px;box-shadow:0 4px 15px rgba(0,0,0,0.1)}
+    h2{text-align:center;color:#1a73e8;margin-bottom:5px}
+    p{text-align:center;color:#666;font-size:14px}
+    label{display:block;margin-top:18px;font-weight:bold;color:#333}
+    input{width:100%;padding:12px;margin-top:6px;border:1px solid #ddd;border-radius:8px;font-size:16px;box-sizing:border-box}
+    .save{width:100%;padding:13px;margin-top:25px;background:#1a73e8;color:white;border:none;border-radius:8px;font-size:16px;cursor:pointer}
+    .back{display:block;text-align:center;margin-top:12px;color:#666;text-decoration:none}
+    </style>
+    <div class='card'>
+    <h2>Edit Subscription Prices</h2>
+    <p>Update prices for all shops</p>
+    <form method='POST'>
+    """
+    for p in plans:
+        html += f"<label>{p['name']} Price (₦)</label><input name='price_{p['name']}' value='{p['amount']}' type='number' step='0.01'>"
+    html += "<button class='save' type='submit'>Save Prices</button><a class='back' href='/superadmin'>← Back to Superadmin</a></form></div>"
+    return html
+
+@app.route("/shop_settings", methods=["GET","POST"])
 @app.route("/shop-settings", methods=["GET","POST"])
 def shop_settings():
-    if session.get('role')=='sales': return blocked_msg("Salesperson cannot view WhatsApp Settings.")
-    if session.get('role') not in ['owner','manager','admin','superadmin']: return blocked_msg()
+    if not session.get('username'): return redirect("/")
+    # Only Manager / Admin / Superadmin fit see am
+    if session.get('role') not in ['owner', 'manager','admin','superadmin']:
+        return redirect("/shop")
+
+    # --- SAVE: This na the only thing this page go save now ---
     if request.method=="POST":
-        upsert_settings(session.get('shop_id'), request.form.get("md_phone",""), request.form.get("manager_phone",""))
-        if session.get('role')=='superadmin':
-            conn=get_db(); conn.execute("DELETE FROM subscription_plans")
-            for n,a,d in [("Monthly",request.form.get("p1"),30),("Quarterly",request.form.get("p2"),90),("Yearly",request.form.get("p3"),365)]:
-                if a: conn.execute("INSERT INTO subscription_plans VALUES (?,?,?)",(n,float(a),d))
-            conn.commit()
-            if session.get("role") == "superadmin":
-                return redirect("/superadmin")
-            return redirect("/shop")
-    plans=get_plans(); c=shop_contacts(session.get('shop_id'))
-    return STYLE+top("WhatsApp Settings","Notifications ONLY to MD & Manager")+f"""<div class="card"><form method="post"><label>MD/CEO WhatsApp Number</label><input name="md_phone" value="{c.get('md_phone','')}" placeholder="e.g. 08037372296"><label>Manager WhatsApp Number</label><input name="manager_phone" value="{c.get('manager_phone','')}" placeholder="e.g. 080..."><label>Monthly Price (₦)</label><input name="p1" value="{plans[0]['amount']:.0f}"><label>Quarterly Price (₦)</label><input name="p2" value="{plans[1]['amount']:.0f}"><label>Yearly Price (₦)</label><input name="p3" value="{plans[2]['amount']:.0f}"><p class="muted">WhatsApp goes to MD & Manager ONLY for: Sales, Purchases, Debtors, Creditors, Settling, Expiry, Stock Levels.</p><button>Save Settings</button></form></div>"""+end()
+        md = request.form.get("md_phone","").strip()
+        mg = request.form.get("manager_phone","").strip()
+        upsert_settings(session.get('shop_id'), md, mg)
+        # Go back straight to Dashboard after save - no trap again
+        return redirect("/shop")
+
+    c = shop_contacts(session.get('shop_id'))
+    return STYLE + top("WhatsApp Settings","Notifications ONLY to MD & Manager") + f"""
+    <div class="card">
+      <form method="post">
+        <label>MD/CEO WhatsApp Number</label>
+        <input name="md_phone" value="{c.get('md_phone','')}" placeholder="e.g. 08037372296" required>
+        <label>Manager WhatsApp Number</label>
+        <input name="manager_phone" value="{c.get('manager_phone','')}" placeholder="e.g. 080..." required>
+        <p class="muted">WhatsApp goes to MD & Manager ONLY for: Sales, Purchases, Debtors, Creditors, Settling, Expiry, Stock Levels.</p>
+        <button>✅ Save Settings</button>
+      </form>
+      <br>
+      <a href="/shop"><button class="blue">⬅️ Back To Dashboard - No Save</button></a>
+      <br><br>
+      <a href="/shop"><button style="background:#64748b">⬅️ Clean - Go Back</button></a>
+    </div>
+    """ + end()
 def notify_page(title,msg):
     c=shop_contacts(session.get('shop_id')); links=""
     if c.get('md_phone'): links+=f"<a href='{wa_link(c['md_phone'],msg)}'><button class='green'>Send to MD/CEO on WhatsApp</button></a><br><br>"
