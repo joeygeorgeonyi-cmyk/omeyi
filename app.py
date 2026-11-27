@@ -9,7 +9,7 @@ DATABASE_URL = os.environ.get("DATABASE_URL")
 DB = "shop.db"
 APP_URL = "https://omeyi.onrender.com"
 PAYMENT_BANK = "Opay"; PAYMENT_ACCOUNT = "8037372296"; PAYMENT_NAME = "Joseph George"
-PRICE_NOTICE = "(Prices may be reviewed at any time) -V10 LIVE!"
+PRICE_NOTICE = "(Prices may be reviewed at any time)"
 DEFAULT_PLANS = [{"name":"Monthly","amount":5000,"days":30},{"name":"Quarterly","amount":13000,"days":90},{"name":"Yearly","amount":45000,"days":365}]
 LOSS_REASONS = ["Expiry","Broken Seal/Others","Broken Bottles","Damaged","Inferior Products"]
 DEBTOR_REASONS = ["Regular/Loyal Customers","Failed POS Transactions","Network Problem","Cut Price","Bonanza","Others"]
